@@ -330,6 +330,12 @@
     let objectCounter = 1;
     let userUploadedImage = null;
 
+    // Debris / dust particles from impacts
+    let debrisParticles = [];
+    const MAX_DEBRIS = 180;
+    const debrisGeo = new THREE.SphereGeometry(0.8, 4, 4);
+    const debrisMat = new THREE.MeshBasicMaterial({ color: 0xffaa44 });
+
     class CelestialBody {
       constructor(name, mass, radius, pos, vel, isStar = false) {
         this.name = name;
@@ -358,6 +364,18 @@
         this.cachedHeightGrid = null;
         this.frameCounter = 0;
 
+        // Gradual collision / impact system (Universe Sandbox inspired)
+        this.glowIntensity = 0;           // 0-1+ for impact heating glow
+        this.impactRelSpeed = 0;          // relative speed at impact start
+        this.isBeingAbsorbed = false;
+        this.absorbingInto = null;        // reference to larger body
+        this.absorbProgress = 0;          // 0-1 how much mass transferred
+        this.impactScar = 0;              // residual surface damage strength
+        this.shockwavePhase = -1;         // -1 = none, 0..1 = traveling around body
+        this.shockwaveStrength = 0;
+        this.originalMass = mass;
+        this.originalRadius = radius;
+
         // Pure 2D texture (higher res but still performant with dirty flag)
         this.canvas = document.createElement('canvas');
         this.canvas.width = 1024;
@@ -376,7 +394,8 @@
             roughness: 0.85,
             flatShading: false,
             emissive: new THREE.Color(0x000000),
-            emissiveIntensity: 0
+            emissiveIntensity: 0,
+            emissiveMap: null
           });
         }
 
@@ -479,6 +498,68 @@
           const scaleVal = 1.0 + Math.min(0.25, this.atmospherePressure * 0.005);
           this.atmosMesh.scale.setScalar(scaleVal);
         }
+      }
+
+      // Visual impact glow based on speed / heating (smaller body during collision)
+      updateImpactGlow() {
+        if (this.isStar || !this.material || !this.material.emissive) return;
+
+        if (this.glowIntensity > 0.01) {
+          // Color shifts from yellow-white (high speed) to deep orange-red (slower / melting)
+          const t = Math.min(1, this.glowIntensity);
+          const speedFactor = Math.min(1, this.impactRelSpeed / 50); // higher speed = hotter white
+          const r = 1.0;
+          const g = 0.25 + 0.55 * (1 - t) + 0.2 * speedFactor;
+          const b = 0.05 + 0.35 * speedFactor * (1 - t * 0.7);
+          this.material.emissive.setRGB(r, g, b);
+          this.material.emissiveIntensity = Math.min(3.5, this.glowIntensity * 2.8 + speedFactor);
+          // Also tint atmosphere if present
+          if (this.atmosMesh) {
+            this.atmosMesh.visible = true;
+            this.atmosMesh.material.color.setRGB(1.0, 0.3 + 0.4 * speedFactor, 0.1);
+            this.atmosMesh.material.opacity = Math.min(0.9, 0.4 + this.glowIntensity * 0.5);
+          }
+        } else if (this.impactScar > 0.05) {
+          // Residual hot scar / molten mark
+          this.material.emissive.setRGB(0.9, 0.25, 0.05);
+          this.material.emissiveIntensity = this.impactScar * 1.2;
+        } else {
+          this.material.emissive.setRGB(0, 0, 0);
+          this.material.emissiveIntensity = 0;
+        }
+
+        // Shockwave visual: bright traveling band around the body
+        if (this.shockwavePhase >= 0 && this.shockwavePhase <= 1.2) {
+          const pulse = Math.sin(this.shockwavePhase * Math.PI * 4) * 0.5 + 0.5;
+          const str = this.shockwaveStrength * (1 - this.shockwavePhase / 1.2) * pulse;
+          if (this.atmosMesh) {
+            this.atmosMesh.visible = true;
+            this.atmosMesh.material.color.setRGB(1.0, 0.6 + 0.3 * pulse, 0.2);
+            this.atmosMesh.material.opacity = Math.min(0.95, 0.3 + str * 0.7);
+            // Slight scale pulse for "expanding" feel
+            const s = 1.0 + str * 0.08;
+            this.atmosMesh.scale.setScalar(s);
+          }
+          // Boost body emissive during shockwave
+          this.material.emissiveIntensity = Math.max(this.material.emissiveIntensity, str * 2.5);
+          this.material.emissive.setRGB(1.0, 0.45, 0.1);
+        }
+      }
+
+      applyImpactScar(strength, isMajor = false) {
+        this.impactScar = Math.min(1.5, this.impactScar + strength);
+        this.collisionHeatRemainingSec = Math.max(this.collisionHeatRemainingSec, strength * 2000000 * SECONDS_PER_YEAR);
+        this.climateFactor = Math.min(1.0, this.climateFactor + strength * 0.6);
+        this.vegetationCoverage = Math.max(0, this.vegetationCoverage - strength * 0.8);
+        if (isMajor) {
+          this.waterCoverage = Math.max(0, this.waterCoverage - strength * 30);
+          this.atmospherePressure = Math.min(100, this.atmospherePressure + strength * 8);
+          this.shockwavePhase = 0;
+          this.shockwaveStrength = Math.min(1.8, strength * 1.4);
+        }
+        this.updateAtmosphereGlow();
+        this.textureDirty = true;
+        this.updateTextureAndDeform(true);
       }
 
       rebuildHeightmap() {
@@ -627,28 +708,89 @@
           this.isStar = true;
           this.name = "Ignited Star " + objectCounter++;
           this.mesh.material = new THREE.MeshBasicMaterial({ color: 0xffddaa });
+          this.glowIntensity = 0;
           this.createHabitabilityRings();
         } else if (this.mass >= 15 && this.mass < 25000 && !this.isStar) {
           this.name = "Gas Giant";
           this.baseRadius = EARTH_RADIUS * Math.pow(this.mass, 0.33);
           this.mesh.scale.setScalar(this.baseRadius / EARTH_RADIUS);
+        } else if (!this.isStar && this.mass < 15) {
+          // Keep terrestrial scale roughly consistent with mass changes from accretion
+          // (but don't fight ongoing absorption shrink)
+          if (!this.isBeingAbsorbed) {
+            const targetR = EARTH_RADIUS * Math.pow(Math.max(0.01, this.mass), 0.28);
+            this.baseRadius = targetR;
+            this.mesh.scale.setScalar(targetR / EARTH_RADIUS);
+          }
         }
       }
 
       destroy() {
         scene.remove(this.mesh);
-        this.geometry.dispose();
-        this.material.dispose();
-        this.texture.dispose();
+        if (this.geometry) this.geometry.dispose();
+        if (this.material) this.material.dispose();
+        if (this.texture) this.texture.dispose();
         if (this.atmosMesh) {
-          this.atmosMesh.geometry.dispose();
-          this.atmosMesh.material.dispose();
+          if (this.atmosMesh.geometry) this.atmosMesh.geometry.dispose();
+          if (this.atmosMesh.material) this.atmosMesh.material.dispose();
         }
+        this.isBeingAbsorbed = false;
+        this.absorbingInto = null;
       }
     }
 
     function findPrimaryStar() {
       return celestialBodies.find(b => b.isStar) || null;
+    }
+
+    function spawnDebris(originPos, baseVel, count, speedScale, colorHex = 0xff8844) {
+      const n = Math.min(count, MAX_DEBRIS - debrisParticles.length);
+      for (let i = 0; i < n; i++) {
+        const mat = debrisMat.clone();
+        mat.color.setHex(colorHex);
+        const mesh = new THREE.Mesh(debrisGeo, mat);
+        mesh.position.copy(originPos);
+        // Random direction + inherited velocity
+        const dir = new THREE.Vector3(
+          (Math.random() - 0.5) * 2,
+          (Math.random() - 0.5) * 2,
+          (Math.random() - 0.5) * 2
+        ).normalize();
+        const speed = (5 + Math.random() * 35) * speedScale;
+        const vel = dir.multiplyScalar(speed).add(baseVel.clone().multiplyScalar(0.4));
+        const life = 4 + Math.random() * 8; // seconds of real time
+        debrisParticles.push({
+          mesh,
+          vel,
+          life,
+          maxLife: life,
+          scale: 0.4 + Math.random() * 1.2
+        });
+        mesh.scale.setScalar(0.4 + Math.random() * 1.2);
+        scene.add(mesh);
+      }
+    }
+
+    function updateDebris(realDt) {
+      for (let i = debrisParticles.length - 1; i >= 0; i--) {
+        const p = debrisParticles[i];
+        p.life -= realDt;
+        if (p.life <= 0) {
+          scene.remove(p.mesh);
+          p.mesh.geometry.dispose();
+          p.mesh.material.dispose();
+          debrisParticles.splice(i, 1);
+          continue;
+        }
+        p.mesh.position.addScaledVector(p.vel, realDt * 60); // exaggerated for visibility
+        // Slow down slightly
+        p.vel.multiplyScalar(0.985);
+        // Fade + shrink
+        const alpha = p.life / p.maxLife;
+        p.mesh.material.opacity = alpha;
+        p.mesh.material.transparent = true;
+        p.mesh.scale.setScalar(p.scale * (0.3 + 0.7 * alpha));
+      }
     }
 
     function populateObjectDropdown() {
@@ -1058,6 +1200,13 @@
       celestialBodies = [];
       selectedObject = null;
       selectionOutline.visible = false;
+      // Clear debris
+      debrisParticles.forEach(p => {
+        scene.remove(p.mesh);
+        if (p.mesh.geometry) p.mesh.geometry.dispose();
+        if (p.mesh.material) p.mesh.material.dispose();
+      });
+      debrisParticles = [];
       populateObjectDropdown();
     });
 
@@ -1099,7 +1248,7 @@
       const realDeltaTimeSec = 0.016; 
       const simDeltaTimeSec = realDeltaTimeSec * simYearsPerSec * SECONDS_PER_YEAR;
 
-      const steps = Math.min(300, Math.max(10, Math.floor(simYearsPerSec * 2)));
+      const steps = Math.min(200, Math.max(8, Math.floor(simYearsPerSec * 1.5)));
       const dt = simDeltaTimeSec / steps;
 
       let bodiesToRemove = new Set();
@@ -1113,37 +1262,143 @@
             if (bodiesToRemove.has(b1) || bodiesToRemove.has(b2)) continue;
             if ((isMovingMode && b1 === selectedObject) || (isMovingMode && b2 === selectedObject)) continue;
 
+            // Skip if one is already being fully absorbed
+            if (b1.isBeingAbsorbed || b2.isBeingAbsorbed) continue;
+
             const dir = new THREE.Vector3().subVectors(b2.pos, b1.pos);
             const dist = dir.length();
-            const collisionDist = (b1.baseRadius + b2.baseRadius) * 0.95;
+            if (dist < 0.001) continue;
 
-            if (dist <= collisionDist) {
-              const survivor = b1.mass >= b2.mass ? b1 : b2;
-              const absorbed = b1.mass >= b2.mass ? b2 : b1;
+            const sumR = b1.baseRadius + b2.baseRadius;
+            const collisionDist = sumR * 0.98;
 
-              survivor.mass += absorbed.mass;
-              survivor.evaluateMassState();
-              survivor.triggerCollisionShock();
-
-              bodiesToRemove.add(absorbed);
-
-              if (selectedObject === absorbed) {
-                selectObject(survivor);
-              }
-              continue;
-            }
-
-            if (dist > 2) {
+            // Gravity always (stronger attraction from higher mass is natural)
+            if (dist > 1.5) {
               const force = (G * b1.mass * b2.mass) / (dist * dist);
               const accel1 = dir.clone().normalize().multiplyScalar(force / b1.mass);
               const accel2 = dir.clone().normalize().multiplyScalar(-force / b2.mass);
-
               b1.vel.addScaledVector(accel1, dt);
               b2.vel.addScaledVector(accel2, dt);
+            }
+
+            // Gradual collision / merge when overlapping
+            if (dist <= collisionDist) {
+              // Determine larger (survivor) and smaller
+              let larger = b1.mass >= b2.mass ? b1 : b2;
+              let smaller = b1.mass >= b2.mass ? b2 : b1;
+
+              // Relative speed for glow intensity and debris
+              const relVel = b1.vel.distanceTo(b2.vel);
+              const impactEnergy = 0.5 * smaller.mass * relVel * relVel;
+
+              // Start absorption state on first contact
+              if (!smaller.isBeingAbsorbed) {
+                smaller.isBeingAbsorbed = true;
+                smaller.absorbingInto = larger;
+                smaller.absorbProgress = 0;
+                smaller.impactRelSpeed = relVel;
+                smaller.glowIntensity = Math.min(2.5, 0.4 + relVel * 0.04 + impactEnergy * 0.00001);
+                smaller.originalMass = smaller.mass;
+                smaller.originalRadius = smaller.baseRadius;
+
+                // Immediate small debris spray
+                const contactPoint = smaller.pos.clone().lerp(larger.pos, smaller.baseRadius / sumR);
+                const debrisCount = Math.min(40, 8 + Math.floor(relVel * 0.8) + Math.floor(smaller.mass * 3));
+                spawnDebris(contactPoint, smaller.vel, debrisCount, 0.6 + relVel * 0.02, relVel > 40 ? 0xffee88 : 0xff6622);
+              }
+
+              // Transfer mass over time (not instant)
+              // Rate depends on overlap depth + relative speed + size
+              const overlap = Math.max(0, collisionDist - dist);
+              const transferRate = (0.15 + relVel * 0.008 + overlap * 0.02) * (dt / SECONDS_PER_YEAR) * 40;
+              // Cap transfer so it takes noticeable time even at high sim speeds
+              const massToTransfer = Math.min(smaller.mass * 0.08, smaller.mass * Math.min(0.35, transferRate));
+
+              if (massToTransfer > 0 && smaller.mass > 0.0005) {
+                smaller.mass -= massToTransfer;
+                larger.mass += massToTransfer;
+                smaller.absorbProgress = 1 - (smaller.mass / Math.max(0.0001, smaller.originalMass));
+
+                // Visually shrink the smaller body
+                const scaleFactor = Math.max(0.08, Math.pow(smaller.mass / smaller.originalMass, 0.4));
+                smaller.baseRadius = smaller.originalRadius * scaleFactor;
+                smaller.mesh.scale.setScalar(scaleFactor);
+
+                // Grow larger slightly (volume-ish)
+                const grow = 1 + (massToTransfer / Math.max(0.1, larger.mass)) * 0.15;
+                larger.baseRadius *= grow;
+                larger.mesh.scale.multiplyScalar(grow);
+
+                // Keep them "stuck" together by pulling smaller toward larger surface
+                const pullDir = dir.clone().normalize();
+                if (b1 === smaller) {
+                  // b1 is smaller
+                  const targetDist = larger.baseRadius * 0.92;
+                  const push = Math.max(0, targetDist - dist) * 0.4;
+                  smaller.pos.addScaledVector(pullDir, -push);
+                  // Dampen relative velocity so it doesn't bounce wildly
+                  const avgVel = larger.vel.clone().add(smaller.vel).multiplyScalar(0.5);
+                  smaller.vel.lerp(avgVel, 0.35);
+                  larger.vel.lerp(avgVel, 0.08);
+                } else {
+                  const targetDist = larger.baseRadius * 0.92;
+                  const push = Math.max(0, targetDist - dist) * 0.4;
+                  smaller.pos.addScaledVector(pullDir, push);
+                  const avgVel = larger.vel.clone().add(smaller.vel).multiplyScalar(0.5);
+                  smaller.vel.lerp(avgVel, 0.35);
+                  larger.vel.lerp(avgVel, 0.08);
+                }
+
+                // Increase glow as it melts in
+                smaller.glowIntensity = Math.min(3.0, smaller.glowIntensity + 0.02 + relVel * 0.001);
+                smaller.updateImpactGlow();
+
+                // Occasional debris while merging
+                if (Math.random() < 0.08 + relVel * 0.002) {
+                  const contactPoint = smaller.pos.clone().lerp(larger.pos, 0.4);
+                  spawnDebris(contactPoint, smaller.vel, 2 + Math.floor(Math.random() * 4), 0.5, 0xff9944);
+                }
+              }
+
+              // Finalize when smaller is mostly gone
+              if (smaller.mass < 0.008 || smaller.absorbProgress > 0.92) {
+                // Transfer any remaining mass
+                larger.mass += smaller.mass;
+                smaller.mass = 0;
+
+                larger.evaluateMassState();
+
+                // Apply scar / shock based on original impact
+                const massRatio = smaller.originalMass / Math.max(0.01, larger.mass);
+                const isMajor = massRatio > 0.08 || smaller.impactRelSpeed > 55 || impactEnergy > 80;
+                const scarStr = Math.min(1.4, 0.15 + massRatio * 2.5 + smaller.impactRelSpeed * 0.008);
+                larger.applyImpactScar(scarStr, isMajor);
+
+                // Final debris burst
+                const contactPoint = smaller.pos.clone();
+                const burstCount = Math.min(60, 12 + Math.floor(smaller.originalMass * 15) + Math.floor(smaller.impactRelSpeed * 0.6));
+                spawnDebris(contactPoint, larger.vel, burstCount, 1.0 + smaller.impactRelSpeed * 0.03, isMajor ? 0xffdd66 : 0xff5500);
+
+                // If major, also briefly boost larger's glow
+                if (isMajor) {
+                  larger.glowIntensity = Math.max(larger.glowIntensity, 1.2);
+                  larger.impactRelSpeed = smaller.impactRelSpeed;
+                }
+
+                bodiesToRemove.add(smaller);
+
+                if (selectedObject === smaller) {
+                  selectObject(larger);
+                }
+              }
+
+              // Still apply a soft force even while colliding so momentum is conserved roughly
+              continue;
             }
           }
         }
 
+        // Integrate positions
         celestialBodies.forEach(b => {
           if (bodiesToRemove.has(b)) return;
           if (isMovingMode && b === selectedObject) return;
@@ -1156,16 +1411,45 @@
         });
       }
 
+      // Clean up fully absorbed bodies
       if (bodiesToRemove.size > 0) {
         bodiesToRemove.forEach(b => {
           const idx = celestialBodies.indexOf(b);
           if (idx !== -1) {
+            // Final visual cleanup
+            b.glowIntensity = 0;
             b.destroy();
             celestialBodies.splice(idx, 1);
           }
         });
         populateObjectDropdown();
       }
+
+      // Update glows, shockwaves, residual scars every frame
+      celestialBodies.forEach(b => {
+        if (b.isStar) return;
+
+        // Decay glow after impact
+        if (b.glowIntensity > 0) {
+          b.glowIntensity = Math.max(0, b.glowIntensity - realDeltaTimeSec * 0.35);
+        }
+        // Decay residual scar
+        if (b.impactScar > 0) {
+          b.impactScar = Math.max(0, b.impactScar - realDeltaTimeSec * 0.04);
+        }
+        // Advance shockwave
+        if (b.shockwavePhase >= 0) {
+          b.shockwavePhase += realDeltaTimeSec * 0.55;
+          if (b.shockwavePhase > 1.25) {
+            b.shockwavePhase = -1;
+            b.shockwaveStrength = 0;
+          }
+        }
+        b.updateImpactGlow();
+      });
+
+      // Update debris particles (real-time)
+      updateDebris(realDeltaTimeSec);
 
       // Climate & Active Green Vegetation Growth Spreading
       const primaryStar = findPrimaryStar();
