@@ -1,0 +1,1289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Realistic Space Simulator Sandbox (RSSS)</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background-color: #000000;
+      color: #fff;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      user-select: none;
+    }
+    #canvas-container {
+      width: 100vw;
+      height: 100vh;
+    }
+    .panel {
+      position: absolute;
+      background: rgba(12, 14, 24, 0.92);
+      padding: 16px;
+      border-radius: 10px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.8);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      z-index: 10;
+    }
+    #ui-controls {
+      top: 15px;
+      left: 15px;
+      width: 290px;
+    }
+    #inspector-panel {
+      top: 15px;
+      right: 15px;
+      width: 320px;
+      display: block;
+      max-height: 90vh;
+      overflow-y: auto;
+    }
+    h2, h3 {
+      margin: 0 0 12px 0;
+      font-size: 1.1rem;
+      color: #61afef;
+    }
+    h3 {
+      font-size: 0.95rem;
+      color: #e5c07b;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+      padding-bottom: 5px;
+    }
+    .control-group {
+      margin-bottom: 12px;
+    }
+    label {
+      display: block;
+      font-size: 0.82rem;
+      margin-bottom: 4px;
+      color: #abb2bf;
+    }
+    input[type="file"], input[type="range"], input[type="number"], select {
+      width: 100%;
+      box-sizing: border-box;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.2);
+      color: white;
+      border-radius: 4px;
+      padding: 6px;
+    }
+    select option {
+      background: #0c0e18;
+      color: white;
+    }
+    button {
+      background: #4b6cc1;
+      border: none;
+      color: white;
+      padding: 8px 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 6px;
+      font-weight: bold;
+      transition: background 0.2s;
+    }
+    button:hover { background: #3b5499; }
+    .btn-spawn {
+      background: #98c379;
+      color: #000;
+    }
+    .btn-spawn:hover { background: #7ca85c; }
+    .btn-move {
+      background: #d19a66;
+      color: #000;
+    }
+    .btn-move.active {
+      background: #e5c07b;
+      box-shadow: 0 0 10px rgba(229, 192, 123, 0.6);
+    }
+    .btn-surface {
+      background: #c678dd;
+      color: #fff;
+    }
+    .btn-surface:hover { background: #a855c4; }
+    .btn-surface.active {
+      background: #e06c75;
+    }
+    .stat-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.82rem;
+      margin-bottom: 6px;
+    }
+    .stat-label { color: #828997; }
+    .stat-val { font-weight: bold; color: #98c379; }
+    .divider {
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      margin: 12px 0;
+    }
+    .status-alert {
+      color: #e06c75;
+      font-weight: bold;
+    }
+  </style>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+</head>
+<body>
+
+  <div id="ui-controls" class="panel">
+    <h2>RSSS</h2>
+    
+    <h3> Spawn Objects</h3>
+    <div class="control-group">
+      <label for="spawn-type">Object Type:</label>
+      <select id="spawn-type">
+        <option value="planet" selected>Planet / Gas Giant</option>
+        <option value="star">Star (Central Mass)</option>
+        <option value="moon">Moon (Attaches to Planet)</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label for="spawn-distance">Distance from Primary Star (AU):</label>
+      <input type="number" id="spawn-distance" value="1.0" step="0.1" min="0">
+    </div>
+
+    <button id="spawn-btn" class="btn-spawn">Spawn Object</button>
+
+    <div class="divider"></div>
+
+    <div class="control-group">
+      <label for="texture-upload">Upload Custom Heightmap:</label>
+      <input type="file" id="texture-upload" accept="image/*">
+    </div>
+
+    <div class="control-group">
+      <label for="sim-speed-input">Sim Speed (Years per Second):</label>
+      <input type="number" id="sim-speed-input" value="0.0001" min="0" step="any">
+    </div>
+
+    <button id="pause-btn">Pause Simulation</button>
+    <button id="reset-cam-btn">Focus Sun</button>
+    <button id="clear-btn" style="background: #e06c75;">Clear All Objects</button>
+  </div>
+
+  <div id="inspector-panel" class="panel">
+    <h3> Object Selection</h3>
+    <div class="control-group">
+      <label for="active-object-select">Select Active Object:</label>
+      <select id="active-object-select"></select>
+    </div>
+
+    <button id="move-toggle-btn" class="btn-move">Move Planet</button>
+    <button id="surface-view-btn" class="btn-surface">View from Surface</button>
+    <button id="city-lights-btn" class="btn-surface" style="margin-top:6px;">Enable City Lights</button>
+
+    <div class="divider"></div>
+
+    <h3>Body Inspector</h3>
+    <div class="stat-row">
+      <span class="stat-label">Classification:</span>
+      <span class="stat-val" id="obj-type">Terrestrial Planet</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Distance to Primary Star:</span>
+      <span class="stat-val" id="obj-dist">1.00 AU</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Climate Zone:</span>
+      <span class="stat-val" id="obj-zone">Habitable</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Habitability Score:</span>
+      <span class="stat-val" id="obj-habitability">100%</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Vegetation Land Coverage:</span>
+      <span class="stat-val" id="obj-veg-coverage">0%</span>
+    </div>
+    <div class="stat-row">
+      <span class="stat-label">Surface Climate:</span>
+      <span class="stat-val" id="obj-climate-progress">Temperate</span>
+    </div>
+
+    <div class="divider"></div>
+    <h3> Atmosphere & Composition</h3>
+
+    <div class="control-group">
+      <label for="atmosphere-type">Atmosphere Air Composition:</label>
+      <select id="atmosphere-type">
+        <option value="earthlike">Nitrogen / Oxygen (Earth-like)</option>
+        <option value="co2">Carbon Dioxide (Venus/Mars-like)</option>
+        <option value="methane">Methane / Ammonia (Titan-like)</option>
+        <option value="vacuum">Vacuum (No Atmosphere)</option>
+      </select>
+    </div>
+
+    <div class="control-group">
+      <label for="atmosphere-pressure">Atmospheric Pressure: <span id="pressure-val">1.0</span> Bar</label>
+      <input type="range" id="atmosphere-pressure" min="0" max="100" step="0.5" value="1.0">
+    </div>
+
+    <div class="control-group">
+      <label for="water-coverage">Surface Water Level (%):</label>
+      <input type="number" id="water-coverage" min="0" max="100" step="0.1" value="56.5">
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="control-group">
+      <label for="mass-input">Modify Mass (Earth Masses):</label>
+      <input type="number" id="mass-input" step="0.5" min="0.01">
+    </div>
+    <button id="apply-mass-btn">Apply Mass Change</button>
+    <button id="delete-obj-btn" style="background: #e06c75; margin-top: 8px;">Delete Object</button>
+  </div>
+
+  <div id="canvas-container"></div>
+
+  <script>
+    const EARTH_RADIUS = 10.0;
+    const SUN_RADIUS = 120.0; 
+    const MOON_RADIUS = 2.7;
+    const MOON_ORBIT_DIST = 120.0;
+    
+    const AU = 8000.0; 
+    const SECONDS_PER_YEAR = 31536000; 
+    const DAY_SECONDS = 86400;
+
+    const SUN_MASS = 333000;
+    const G = (4 * Math.PI * Math.PI * Math.pow(AU, 3)) / (SUN_MASS * Math.pow(SECONDS_PER_YEAR, 2));
+
+    let defaultGrayscaleImg = new Image();
+    defaultGrayscaleImg.crossOrigin = "Anonymous";
+
+    let cloudImg = new Image();
+    cloudImg.crossOrigin = "Anonymous";
+    let cloudImgReady = false;
+    let cloudPixelData = null;
+
+    defaultGrayscaleImg.onload = () => {
+      celestialBodies.forEach(b => {
+        b.rebuildHeightmap();
+        b.updateTextureAndDeform(true);
+      });
+    };
+
+    cloudImg.onload = () => {
+      // Sample cloud.png into pixel data for fast scrolling
+      const cCanvas = document.createElement('canvas');
+      cCanvas.width = 1024;
+      cCanvas.height = 512;
+      const cCtx = cCanvas.getContext('2d');
+      cCtx.drawImage(cloudImg, 0, 0, 1024, 512);
+      cloudPixelData = cCtx.getImageData(0, 0, 1024, 512);
+      cloudImgReady = true;
+      celestialBodies.forEach(b => {
+        if (!b.isStar) {
+          b.textureDirty = true;
+          b.updateTextureAndDeform(true);
+        }
+      });
+    };
+
+    defaultGrayscaleImg.src = 'earth.jpeg';
+    cloudImg.src = 'cloud.png';
+
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+
+    const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.01, 2000000);
+    camera.position.set(0, AU * 0.8, AU * 1.8);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.shadowMap.enabled = true;
+    container.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+    controls.enableDamping = true;
+    controls.maxDistance = 1500000;
+
+    const raycaster = new THREE.Raycaster();
+    const mouse = new THREE.Vector2();
+    let selectedObject = null;
+    let isMovingMode = false;
+    let isSurfaceView = false;
+
+    const outlineGeo = new THREE.RingGeometry(1.2, 1.35, 64);
+    const outlineMat = new THREE.MeshBasicMaterial({ color: 0x61afef, side: THREE.DoubleSide });
+    const selectionOutline = new THREE.Mesh(outlineGeo, outlineMat);
+    selectionOutline.visible = false;
+    scene.add(selectionOutline);
+
+    const ambientLight = new THREE.AmbientLight(0x555566, 0.6);
+    scene.add(ambientLight);
+
+    const sunLight = new THREE.PointLight(0xffffff, 3.5, 0, 0.1);
+    scene.add(sunLight);
+
+    let simYearsPerSec = 0.0001; 
+    let isPaused = false;
+
+    let celestialBodies = [];
+    let objectCounter = 1;
+    let userUploadedImage = null;
+
+    class CelestialBody {
+      constructor(name, mass, radius, pos, vel, isStar = false) {
+        this.name = name;
+        this.mass = mass;
+        this.baseRadius = radius;
+        this.isStar = isStar;
+        this.pos = pos.clone();
+        this.vel = vel.clone();
+
+        this.atmosphereType = 'earthlike';
+        this.atmospherePressure = isStar ? 0.0 : 1.0;
+        this.waterCoverage = isStar ? 0 : 56.5;
+
+        this.climateFactor = 0.5;
+        this.targetClimateFactor = 0.5;
+        this.vegetationCoverage = 0.05;
+
+        this.collisionHeatRemainingSec = 0;
+        this.parentBody = null;
+
+        // New features
+        this.cityLightsEnabled = false;
+        this.axialTilt = 23.5 * Math.PI / 180; // Earth-like tilt
+        this.cloudOffset = Math.random() * 1000;
+        this.textureDirty = true;
+        this.cachedHeightGrid = null;
+        this.frameCounter = 0;
+
+        // Pure 2D texture (higher res but still performant with dirty flag)
+        this.canvas = document.createElement('canvas');
+        this.canvas.width = 1024;
+        this.canvas.height = 512;
+        this.ctx = this.canvas.getContext('2d');
+        this.texture = new THREE.CanvasTexture(this.canvas);
+
+        // SMOOTH SPHERE ONLY — zero 3D terrain
+        this.geometry = new THREE.SphereGeometry(radius, 64, 64);
+
+        if (this.isStar) {
+          this.material = new THREE.MeshBasicMaterial({ color: 0xffddaa });
+        } else {
+          this.material = new THREE.MeshStandardMaterial({
+            map: this.texture,
+            roughness: 0.85,
+            flatShading: false,
+            emissive: new THREE.Color(0x000000),
+            emissiveIntensity: 0
+          });
+        }
+
+        this.mesh = new THREE.Mesh(this.geometry, this.material);
+        this.mesh.position.copy(this.pos);
+        this.mesh.userData.body = this;
+        // Only Earth gets axial tilt
+        if (name === "Earth") {
+          this.mesh.rotation.z = this.axialTilt;
+        }
+        scene.add(this.mesh);
+
+        // Atmosphere
+        const atmosGeo = new THREE.SphereGeometry(radius * (this.isStar ? 1.15 : 1.05), 32, 32);
+        const atmosMat = new THREE.MeshBasicMaterial({
+          color: this.isStar ? 0xffaa22 : 0x61afef,
+          transparent: true,
+          opacity: this.isStar ? 0.6 : 0.25,
+          side: THREE.BackSide
+        });
+        this.atmosMesh = new THREE.Mesh(atmosGeo, atmosMat);
+        this.mesh.add(this.atmosMesh);
+
+        this.ringsGroup = new THREE.Group();
+        this.mesh.add(this.ringsGroup);
+        if (this.isStar) {
+          this.createHabitabilityRings();
+        } else {
+          this.updateTextureAndDeform(true);
+        }
+
+        this.updateAtmosphereGlow();
+      }
+
+      createHabitabilityRings() {
+        while (this.ringsGroup.children.length > 0) {
+          const child = this.ringsGroup.children[0];
+          this.ringsGroup.remove(child);
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) child.material.dispose();
+        }
+
+        const createRing = (innerAU, outerAU, colorHex) => {
+          const innerR = innerAU * AU;
+          const outerR = outerAU * AU;
+          const ringGeo = new THREE.RingGeometry(innerR, outerR, 128);
+          const ringMat = new THREE.MeshBasicMaterial({
+            color: colorHex,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.25
+          });
+          const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+          ringMesh.rotation.x = Math.PI / 2;
+          return ringMesh;
+        };
+
+        this.ringsGroup.add(createRing(0.1, 0.75, 0xe06c75));  
+        this.ringsGroup.add(createRing(0.75, 1.37, 0x98c379)); 
+        this.ringsGroup.add(createRing(1.37, 3.5, 0x61afef));  
+      }
+
+      triggerCollisionShock() {
+        this.collisionHeatRemainingSec = 10000000 * SECONDS_PER_YEAR; 
+        this.waterCoverage = 0; 
+        this.vegetationCoverage = 0.0;
+        this.atmospherePressure = Math.min(100, this.atmospherePressure + 10.0);
+        this.climateFactor = 1.0; 
+        this.updateAtmosphereGlow();
+        this.updateTextureAndDeform();
+      }
+
+      updateAtmosphereGlow() {
+        if (!this.atmosMesh) return;
+        
+        if (this.isStar) {
+          this.atmosMesh.visible = true;
+          this.atmosMesh.material.color.setHex(0xffaa22);
+          this.atmosMesh.material.opacity = 0.6;
+          return;
+        }
+
+        if (this.collisionHeatRemainingSec > 0) {
+          this.atmosMesh.visible = true;
+          this.atmosMesh.material.color.setHex(0xff3300); 
+          this.atmosMesh.material.opacity = 0.85;
+          return;
+        }
+
+        if (this.atmosphereType === 'vacuum' || this.atmospherePressure <= 0) {
+          this.atmosMesh.visible = false;
+        } else {
+          this.atmosMesh.visible = true;
+          let atmosColor = 0x61afef;
+          if (this.atmosphereType === 'co2') atmosColor = 0xe5c07b;
+          if (this.atmosphereType === 'methane') atmosColor = 0xc678dd;
+
+          this.atmosMesh.material.color.setHex(atmosColor);
+          this.atmosMesh.material.opacity = Math.min(0.85, 0.15 + this.atmospherePressure * 0.02);
+          const scaleVal = 1.0 + Math.min(0.25, this.atmospherePressure * 0.005);
+          this.atmosMesh.scale.setScalar(scaleVal);
+        }
+      }
+
+      rebuildHeightmap() {
+        if (this.isStar) return;
+        const activeImg = userUploadedImage || (defaultGrayscaleImg.complete && defaultGrayscaleImg.naturalWidth !== 0 ? defaultGrayscaleImg : null);
+        const w = this.canvas.width, h = this.canvas.height;
+        try {
+          if (activeImg) this.ctx.drawImage(activeImg, 0, 0, w, h);
+          else { this.ctx.fillStyle = '#808080'; this.ctx.fillRect(0, 0, w, h); }
+          const imgData = this.ctx.getImageData(0, 0, w, h);
+          const src = imgData.data;
+          const heightGrid = new Float32Array(w * h);
+          for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              let sum = 0, count = 0;
+              for (let dy = -1; dy <= 1; dy++) {
+                for (let dx = -1; dx <= 1; dx++) {
+                  const nx = (x + dx + w) % w;
+                  const ny = Math.max(0, Math.min(h - 1, y + dy));
+                  const i = (ny * w + nx) * 4;
+                  sum += (src[i] + src[i+1] + src[i+2]) / 3 / 255;
+                  count++;
+                }
+              }
+              heightGrid[y * w + x] = sum / count;
+            }
+          }
+          this.cachedHeightGrid = heightGrid;
+          this.textureDirty = true;
+        } catch (e) {}
+      }
+
+      // PURE 2D texture. Only runs expensive work when dirty or forced.
+      updateTextureAndDeform(force = false) {
+        if (this.isStar) return;
+        if (!this.cachedHeightGrid) this.rebuildHeightmap();
+        if (!force && !this.textureDirty) return;
+        if (!this.cachedHeightGrid) return;
+
+        const w = this.canvas.width, h = this.canvas.height;
+        const heightGrid = this.cachedHeightGrid;
+        const waterThreshold = this.waterCoverage / 100;
+        const isMoltenImpact = this.collisionHeatRemainingSec > 0;
+
+        // Distance-based coldness (farther from star = more ice)
+        let distAU = 1.0;
+        const primary = findPrimaryStar();
+        if (primary && primary !== this) {
+          distAU = this.pos.distanceTo(primary.pos) / AU;
+        }
+        const distCold = Math.max(0, (distAU - 0.9) * 1.2); // starts growing ice beyond ~0.9 AU
+
+        try {
+          const imgData = this.ctx.createImageData(w, h);
+          const data = imgData.data;
+
+          for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              const idx = (y * w + x) * 4;
+              const brightnessNorm = heightGrid[y * w + x];
+              const elevation = brightnessNorm * 255;
+              const landRatio = (brightnessNorm - waterThreshold) / Math.max(0.001, 1 - waterThreshold);
+
+              // Latitude from UV (0 = north pole, 1 = south pole)
+              const lat = (y / h) * 2 - 1; // -1 to +1
+              const poleFactor = Math.pow(Math.abs(lat), 1.8); // stronger at poles
+
+              if (isMoltenImpact) {
+                data[idx] = 255; data[idx+1] = Math.min(255, 60 + elevation * 0.5);
+                data[idx+2] = Math.min(100, elevation * 0.2); data[idx+3] = 255;
+              } else if (landRatio < 0) {
+                // 2D WATER — deeper darker, shallower lighter
+                const depth = Math.min(1, Math.max(0, -landRatio));
+                const shallow = 1 - depth;
+                data[idx]   = Math.floor( 8 + shallow * 50 + elevation * 0.08);
+                data[idx+1] = Math.floor(25 + shallow * 95 + elevation * 0.28);
+                data[idx+2] = Math.floor(70 + shallow *150 + elevation * 0.40);
+                data[idx+3] = 255;
+              } else {
+                // LAND base color
+                if (this.waterCoverage === 0 || this.climateFactor > 0.8) {
+                  data[idx] = Math.min(255, elevation * 0.85 + 50);
+                  data[idx+1] = Math.min(255, elevation * 0.45 + 15);
+                  data[idx+2] = Math.min(255, elevation * 0.25 + 10);
+                } else if (landRatio <= this.vegetationCoverage && this.climateFactor >= 0.2) {
+                  const vegI = Math.sin((this.climateFactor - 0.2) / 0.6 * Math.PI);
+                  data[idx] = Math.min(255, elevation * 0.22);
+                  data[idx+1] = Math.min(255, 105 + elevation * 0.55 * vegI);
+                  data[idx+2] = Math.min(255, elevation * 0.18);
+                } else {
+                  data[idx] = Math.min(255, elevation * 0.7 + 45);
+                  data[idx+1] = Math.min(255, elevation * 0.5 + 25);
+                  data[idx+2] = Math.min(255, elevation * 0.3 + 10);
+                }
+
+                // ICE — poles + high elevation + distance from star
+                // Higher terrain = colder
+                const elevCold = Math.max(0, (brightnessNorm - 0.55) * 2.2);
+                const iceAmount = Math.min(1, poleFactor * 1.4 + elevCold * 0.9 + distCold + (this.climateFactor < 0.3 ? 0.5 : 0));
+                if (iceAmount > 0.35) {
+                  const iceStrength = Math.min(1, (iceAmount - 0.35) * 1.8);
+                  data[idx]   = Math.min(255, data[idx]   * (1 - iceStrength) + 230 * iceStrength);
+                  data[idx+1] = Math.min(255, data[idx+1] * (1 - iceStrength) + 240 * iceStrength);
+                  data[idx+2] = Math.min(255, data[idx+2] * (1 - iceStrength) + 255 * iceStrength);
+                }
+
+                // CITY LIGHTS — yellowish white, only on land
+                if (this.cityLightsEnabled) {
+                  const lightNoise = ((x * 73 + y * 149) % 170);
+                  if (lightNoise < 3) {
+                    data[idx]   = 255;
+                    data[idx+1] = 235;
+                    data[idx+2] = 180;
+                  }
+                }
+                data[idx+3] = 255;
+              }
+
+              // CLOUDS — real cloud.png texture, scrolls slowly
+              if (cloudImgReady && this.atmospherePressure > 0.1 && cloudPixelData) {
+                const cW = cloudPixelData.width;
+                const cH = cloudPixelData.height;
+                const cx = ((x / w) * cW + this.cloudOffset * 0.4) % cW | 0;
+                const cy = ((y / h) * cH + this.cloudOffset * 0.15) % cH | 0;
+                const cIdx = (cy * cW + cx) * 4;
+                // Use alpha or brightness of cloud map
+                const cloudAlpha = cloudPixelData.data[cIdx + 3] / 255;
+                const cloudBright = (cloudPixelData.data[cIdx] + cloudPixelData.data[cIdx+1] + cloudPixelData.data[cIdx+2]) / 3 / 255;
+                const cloudStr = Math.max(cloudAlpha, cloudBright) * 0.7;
+                if (cloudStr > 0.08) {
+                  data[idx]   = Math.min(255, data[idx]   * (1 - cloudStr) + 250 * cloudStr);
+                  data[idx+1] = Math.min(255, data[idx+1] * (1 - cloudStr) + 252 * cloudStr);
+                  data[idx+2] = Math.min(255, data[idx+2] * (1 - cloudStr) + 255 * cloudStr);
+                }
+              }
+            }
+          }
+          this.ctx.putImageData(imgData, 0, 0);
+          this.texture.needsUpdate = true;
+          this.textureDirty = false;
+        } catch (e) {}
+      }
+
+      evaluateMassState() {
+        if (this.mass >= 25000 && !this.isStar) {
+          this.isStar = true;
+          this.name = "Ignited Star " + objectCounter++;
+          this.mesh.material = new THREE.MeshBasicMaterial({ color: 0xffddaa });
+          this.createHabitabilityRings();
+        } else if (this.mass >= 15 && this.mass < 25000 && !this.isStar) {
+          this.name = "Gas Giant";
+          this.baseRadius = EARTH_RADIUS * Math.pow(this.mass, 0.33);
+          this.mesh.scale.setScalar(this.baseRadius / EARTH_RADIUS);
+        }
+      }
+
+      destroy() {
+        scene.remove(this.mesh);
+        this.geometry.dispose();
+        this.material.dispose();
+        this.texture.dispose();
+        if (this.atmosMesh) {
+          this.atmosMesh.geometry.dispose();
+          this.atmosMesh.material.dispose();
+        }
+      }
+    }
+
+    function findPrimaryStar() {
+      return celestialBodies.find(b => b.isStar) || null;
+    }
+
+    function populateObjectDropdown() {
+      const select = document.getElementById('active-object-select');
+      select.innerHTML = '';
+      celestialBodies.forEach((body, idx) => {
+        const option = document.createElement('option');
+        option.value = idx;
+        option.textContent = body.name;
+        select.appendChild(option);
+      });
+      if (selectedObject) {
+        select.value = celestialBodies.indexOf(selectedObject);
+      }
+    }
+
+    function focusCameraOn(body) {
+      if (!body) return;
+      isSurfaceView = false;
+      document.getElementById('surface-view-btn').classList.remove('active');
+      document.getElementById('surface-view-btn').textContent = "View from Surface";
+
+      controls.target.copy(body.pos);
+      const distOffset = Math.max(body.baseRadius * 18, 25);
+      const direction = camera.position.clone().sub(controls.target).normalize();
+      
+      camera.position.copy(body.pos).add(direction.multiplyScalar(distOffset));
+      controls.update();
+    }
+
+    function toggleSurfaceView() {
+      if (!selectedObject) return;
+      
+      isSurfaceView = !isSurfaceView;
+      const surfaceBtn = document.getElementById('surface-view-btn');
+
+      if (isSurfaceView) {
+        surfaceBtn.classList.add('active');
+        surfaceBtn.textContent = "Exit Surface View";
+
+        // Place camera at surface standing height facing outward along the horizon
+        const surfaceDir = new THREE.Vector3(0, 1, 0.2).normalize(); 
+        const standingHeight = selectedObject.baseRadius * 1.03; 
+        
+        const eyeLevelPos = selectedObject.pos.clone().add(surfaceDir.clone().multiplyScalar(standingHeight));
+        const viewTargetPos = eyeLevelPos.clone().add(new THREE.Vector3(10, 0.5, 5));
+
+        camera.position.copy(eyeLevelPos);
+        controls.target.copy(viewTargetPos);
+        camera.lookAt(viewTargetPos);
+        controls.update();
+      } else {
+        focusCameraOn(selectedObject);
+      }
+    }
+
+    document.getElementById('surface-view-btn').addEventListener('click', toggleSurfaceView);
+
+    const sun = new CelestialBody("Sun", SUN_MASS, SUN_RADIUS, new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0), true);
+    celestialBodies.push(sun);
+
+    const earthOrbVel = Math.sqrt((G * sun.mass) / AU);
+    const earthPos = new THREE.Vector3(AU, 0, 0);
+    const earthVel = new THREE.Vector3(0, 0, earthOrbVel);
+    const earth = new CelestialBody("Earth", 1.0, EARTH_RADIUS, earthPos, earthVel);
+    celestialBodies.push(earth);
+
+    const moonOrbVel = Math.sqrt((G * earth.mass) / MOON_ORBIT_DIST);
+    const moonPos = earthPos.clone().add(new THREE.Vector3(MOON_ORBIT_DIST, 0, 0));
+    const moonVel = earthVel.clone().add(new THREE.Vector3(0, 0, moonOrbVel));
+    const moon = new CelestialBody("Moon", 0.0123, MOON_RADIUS, moonPos, moonVel);
+    moon.parentBody = earth;
+    moon.atmosphereType = 'vacuum';
+    moon.atmospherePressure = 0.0;
+    moon.waterCoverage = 0;
+    moon.updateTextureAndDeform();
+    celestialBodies.push(moon);
+
+    selectObject(earth);
+
+    document.getElementById('spawn-btn').addEventListener('click', () => {
+      const type = document.getElementById('spawn-type').value;
+      const distAU = parseFloat(document.getElementById('spawn-distance').value) || 0;
+      const spawnDist = distAU * AU;
+
+      const primaryStar = findPrimaryStar();
+      const centerPos = primaryStar ? primaryStar.pos : new THREE.Vector3(0, 0, 0);
+
+      let spawnPos = centerPos.clone().add(new THREE.Vector3(spawnDist, 0, 0));
+      let spawnVel = new THREE.Vector3(0, 0, 0);
+
+      let newBody = null;
+      if (type === 'star') {
+        newBody = new CelestialBody(`Star ${objectCounter++}`, SUN_MASS, SUN_RADIUS, spawnPos, spawnVel, true);
+      } else if (type === 'planet') {
+        if (primaryStar && spawnDist > 0) {
+          const v = Math.sqrt((G * primaryStar.mass) / spawnDist);
+          spawnVel.set(0, 0, v);
+        }
+        newBody = new CelestialBody(`Planet ${objectCounter++}`, 1.0, EARTH_RADIUS, spawnPos, spawnVel);
+      } else if (type === 'moon') {
+        let parentObj = selectedObject || earth;
+        if (parentObj && !parentObj.isStar) {
+          spawnPos = parentObj.pos.clone().add(new THREE.Vector3(MOON_ORBIT_DIST, 0, 0));
+          const v = Math.sqrt((G * parentObj.mass) / MOON_ORBIT_DIST);
+          spawnVel = parentObj.vel.clone().add(new THREE.Vector3(0, 0, v));
+        } else if (primaryStar && spawnDist > 0) {
+          const v = Math.sqrt((G * primaryStar.mass) / spawnDist);
+          spawnVel.set(0, 0, v);
+        }
+        newBody = new CelestialBody(`Moon ${objectCounter++}`, 0.012, MOON_RADIUS, spawnPos, spawnVel);
+        if (parentObj && !parentObj.isStar) newBody.parentBody = parentObj;
+        newBody.atmosphereType = 'vacuum';
+        newBody.atmospherePressure = 0.0;
+        newBody.waterCoverage = 0;
+        newBody.updateTextureAndDeform();
+      }
+      
+      if (newBody) {
+        celestialBodies.push(newBody);
+        selectObject(newBody);
+      }
+    });
+
+    document.getElementById('texture-upload').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const img = new Image();
+          img.onload = () => {
+            userUploadedImage = img;
+            celestialBodies.forEach(b => {
+              b.rebuildHeightmap();
+              b.updateTextureAndDeform(true);
+            });
+          };
+          img.src = event.target.result;
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+
+    const moveBtn = document.getElementById('move-toggle-btn');
+    moveBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (!selectedObject) return;
+
+      isMovingMode = !isMovingMode;
+      if (isMovingMode) {
+        moveBtn.textContent = "Place Planet";
+        moveBtn.classList.add('active');
+        controls.enabled = false; 
+
+        const primaryStar = findPrimaryStar();
+        const centerPos = primaryStar ? primaryStar.pos : new THREE.Vector3(0, 0, 0);
+        
+        controls.target.copy(centerPos);
+        camera.position.set(centerPos.x, centerPos.y + AU * 3.5, centerPos.z + 10);
+        camera.lookAt(centerPos);
+        controls.update();
+      } else {
+        finalizePlacement();
+      }
+    });
+
+    function finalizePlacement() {
+      isMovingMode = false;
+      moveBtn.textContent = "Move Planet";
+      moveBtn.classList.remove('active');
+      controls.enabled = true;
+
+      if (selectedObject) {
+        const primaryStar = findPrimaryStar();
+        if (primaryStar && primaryStar !== selectedObject) {
+          const dist = selectedObject.pos.distanceTo(primaryStar.pos);
+          const orbSpeed = Math.sqrt((G * primaryStar.mass) / dist);
+          
+          const dir = new THREE.Vector3().subVectors(selectedObject.pos, primaryStar.pos).normalize();
+          const tangent = new THREE.Vector3(-dir.z, 0, dir.x);
+          selectedObject.vel.copy(tangent.multiplyScalar(orbSpeed));
+        } else {
+          selectedObject.vel.set(0, 0, 0);
+        }
+
+        celestialBodies.forEach(child => {
+          if (child.parentBody === selectedObject) {
+            child.pos.copy(selectedObject.pos).add(new THREE.Vector3(MOON_ORBIT_DIST, 0, 0));
+            const v = Math.sqrt((G * selectedObject.mass) / MOON_ORBIT_DIST);
+            child.vel.copy(selectedObject.vel).add(new THREE.Vector3(0, 0, v));
+          }
+        });
+
+        focusCameraOn(selectedObject);
+      }
+    }
+
+    const orbitPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+
+    function handlePointerMove(e) {
+      if (!isMovingMode || !selectedObject) return;
+
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+      const intersectPoint = new THREE.Vector3();
+      raycaster.ray.intersectPlane(orbitPlane, intersectPoint);
+
+      if (intersectPoint) {
+        const delta = intersectPoint.clone().sub(selectedObject.pos);
+        selectedObject.pos.copy(intersectPoint);
+        selectedObject.mesh.position.copy(selectedObject.pos);
+        selectedObject.vel.set(0, 0, 0);
+
+        celestialBodies.forEach(child => {
+          if (child.parentBody === selectedObject) {
+            child.pos.add(delta);
+            child.mesh.position.copy(child.pos);
+          }
+        });
+      }
+    }
+
+    window.addEventListener('mousemove', handlePointerMove);
+    window.addEventListener('touchmove', (e) => {
+      if (e.touches.length > 0) {
+        handlePointerMove(e.touches[0]);
+      }
+    });
+
+    window.addEventListener('click', (e) => {
+      if (e.target.closest('.panel')) return;
+
+      if (isMovingMode) {
+        finalizePlacement();
+        return;
+      }
+
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+
+      raycaster.setFromCamera(mouse, camera);
+
+      const meshesToTest = celestialBodies.map(b => b.mesh).filter(Boolean);
+      const intersects = raycaster.intersectObjects(meshesToTest);
+
+      if (intersects.length > 0) {
+        selectObject(intersects[0].object.userData.body);
+      }
+    });
+
+    function selectObject(body) {
+      if (!body) return;
+
+      if (isMovingMode) {
+        finalizePlacement();
+      }
+
+      selectedObject = body;
+      
+      populateObjectDropdown();
+      document.getElementById('active-object-select').value = celestialBodies.indexOf(body);
+
+      document.getElementById('mass-input').value = body.mass;
+      document.getElementById('atmosphere-type').value = body.atmosphereType;
+      document.getElementById('atmosphere-pressure').value = body.atmospherePressure;
+      document.getElementById('pressure-val').textContent = body.atmospherePressure.toFixed(1);
+      document.getElementById('water-coverage').value = body.waterCoverage;
+
+      // Update city lights button for selected object
+      const lightsBtn = document.getElementById('city-lights-btn');
+      if (lightsBtn) {
+        lightsBtn.textContent = body.cityLightsEnabled ? "Disable City Lights" : "Enable City Lights";
+        lightsBtn.style.display = body.isStar ? 'none' : 'block';
+      }
+
+      selectionOutline.visible = true;
+      updateInspectorStats(body);
+
+      focusCameraOn(body);
+    }
+
+    document.getElementById('active-object-select').addEventListener('change', (e) => {
+      const idx = parseInt(e.target.value);
+      if (celestialBodies[idx]) {
+        selectObject(celestialBodies[idx]);
+      }
+    });
+
+    function updateInspectorStats(body) {
+      if (!body) return;
+      const primaryStar = findPrimaryStar();
+      
+      let distText = "N/A";
+      let zoneText = "N/A";
+      let climateText = "N/A";
+      let habitabilityScore = 0;
+
+      if (primaryStar && primaryStar !== body) {
+        const distToSun = body.pos.distanceTo(primaryStar.pos);
+        distText = (distToSun / AU).toFixed(2) + " AU";
+
+        if (distToSun < AU * 0.75) {
+          zoneText = "Scorched Zone";
+        } else if (distToSun > AU * 1.37) {
+          zoneText = "Frozen Deep Space";
+        } else {
+          zoneText = "Habitable Zone";
+        }
+      }
+
+      if (body.collisionHeatRemainingSec > 0) {
+        const yrsRemaining = Math.round(body.collisionHeatRemainingSec / SECONDS_PER_YEAR);
+        climateText = ` MOLTEN COLLISION SHOCK (${(yrsRemaining / 1000000).toFixed(1)}M Yrs)`;
+      } else if (body.climateFactor > 0.75) {
+        climateText = "Thermal Runaway / Boiling";
+      } else if (body.climateFactor < 0.25) {
+        climateText = "Frigid Glacial Ice";
+      } else {
+        climateText = "Temperate Greenery";
+      }
+
+      if (!body.isStar) {
+        if (body.collisionHeatRemainingSec > 0) {
+          habitabilityScore = 0; 
+        } else {
+          const distancePenalty = Math.abs(body.climateFactor - 0.5) * 2;
+          const atmosPenalty = Math.min(1.0, Math.abs(body.atmospherePressure - 1.0) / 10);
+          const waterBonus = body.waterCoverage > 20 && body.waterCoverage < 85 ? 1 : 0.3;
+          const compositionBonus = body.atmosphereType === 'earthlike' ? 1 : 0.2;
+
+          habitabilityScore = Math.max(0, Math.round((1 - distancePenalty) * waterBonus * compositionBonus * (1 - atmosPenalty) * 100));
+        }
+      }
+
+      document.getElementById('obj-type').textContent = body.isStar ? "Star" : (body.mass >= 15 ? "Gas Giant" : "Terrestrial Body");
+      document.getElementById('obj-dist').textContent = distText;
+      document.getElementById('obj-zone').textContent = zoneText;
+      document.getElementById('obj-habitability').textContent = body.isStar ? "N/A" : habitabilityScore + "%";
+      document.getElementById('obj-veg-coverage').textContent = body.isStar ? "N/A" : Math.round(body.vegetationCoverage * 100) + "%";
+
+      const climateEl = document.getElementById('obj-climate-progress');
+      climateEl.textContent = climateText;
+      if (body.collisionHeatRemainingSec > 0) {
+        climateEl.className = "stat-val status-alert";
+      } else {
+        climateEl.className = "stat-val";
+      }
+    }
+
+    document.getElementById('atmosphere-type').addEventListener('change', (e) => {
+      if (selectedObject) {
+        selectedObject.atmosphereType = e.target.value;
+        selectedObject.updateAtmosphereGlow();
+        selectedObject.updateTextureAndDeform();
+      }
+    });
+
+    document.getElementById('atmosphere-pressure').addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      document.getElementById('pressure-val').textContent = val.toFixed(1);
+      if (selectedObject) {
+        selectedObject.atmospherePressure = val;
+        selectedObject.updateAtmosphereGlow();
+      }
+    });
+
+    document.getElementById('water-coverage').addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      if (isNaN(val)) return;
+      if (selectedObject) {
+        selectedObject.waterCoverage = Math.max(0, Math.min(100, val));
+        selectedObject.textureDirty = true;
+        selectedObject.updateTextureAndDeform(true);
+      }
+    });
+
+    document.getElementById('city-lights-btn').addEventListener('click', () => {
+      if (!selectedObject || selectedObject.isStar) return;
+      selectedObject.cityLightsEnabled = !selectedObject.cityLightsEnabled;
+      selectedObject.textureDirty = true;
+      selectedObject.updateTextureAndDeform(true);
+      const btn = document.getElementById('city-lights-btn');
+      btn.textContent = selectedObject.cityLightsEnabled ? "Disable City Lights" : "Enable City Lights";
+    });
+
+    document.getElementById('delete-obj-btn').addEventListener('click', () => {
+      if (selectedObject) {
+        const idx = celestialBodies.indexOf(selectedObject);
+        if (idx !== -1) {
+          selectedObject.destroy();
+          celestialBodies.splice(idx, 1);
+        }
+        if (celestialBodies.length > 0) {
+          selectObject(celestialBodies[0]);
+        } else {
+          selectedObject = null;
+          selectionOutline.visible = false;
+          populateObjectDropdown();
+        }
+      }
+    });
+
+    document.getElementById('clear-btn').addEventListener('click', () => {
+      celestialBodies.forEach(b => b.destroy());
+      celestialBodies = [];
+      selectedObject = null;
+      selectionOutline.visible = false;
+      populateObjectDropdown();
+    });
+
+    document.getElementById('apply-mass-btn').addEventListener('click', () => {
+      if (selectedObject) {
+        const newMass = parseFloat(document.getElementById('mass-input').value);
+        if (!isNaN(newMass) && newMass > 0) {
+          selectedObject.mass = newMass;
+          selectedObject.evaluateMassState();
+          updateInspectorStats(selectedObject);
+        }
+      }
+    });
+
+    const simSpeedInput = document.getElementById('sim-speed-input');
+    simSpeedInput.addEventListener('input', (e) => {
+      const val = parseFloat(e.target.value);
+      simYearsPerSec = isNaN(val) || val < 0 ? 0 : val;
+    });
+
+    const pauseBtn = document.getElementById('pause-btn');
+    pauseBtn.addEventListener('click', () => {
+      isPaused = !isPaused;
+      pauseBtn.textContent = isPaused ? "Resume Simulation" : "Pause Simulation";
+    });
+
+    document.getElementById('reset-cam-btn').addEventListener('click', () => {
+      const primaryStar = findPrimaryStar();
+      if (primaryStar) {
+        selectObject(primaryStar);
+      } else {
+        controls.target.set(0, 0, 0);
+      }
+    });
+
+    function updatePhysics() {
+      if (isPaused || simYearsPerSec <= 0) return;
+
+      const realDeltaTimeSec = 0.016; 
+      const simDeltaTimeSec = realDeltaTimeSec * simYearsPerSec * SECONDS_PER_YEAR;
+
+      const steps = Math.min(300, Math.max(10, Math.floor(simYearsPerSec * 2)));
+      const dt = simDeltaTimeSec / steps;
+
+      let bodiesToRemove = new Set();
+
+      for (let s = 0; s < steps; s++) {
+        for (let i = 0; i < celestialBodies.length; i++) {
+          for (let j = i + 1; j < celestialBodies.length; j++) {
+            const b1 = celestialBodies[i];
+            const b2 = celestialBodies[j];
+
+            if (bodiesToRemove.has(b1) || bodiesToRemove.has(b2)) continue;
+            if ((isMovingMode && b1 === selectedObject) || (isMovingMode && b2 === selectedObject)) continue;
+
+            const dir = new THREE.Vector3().subVectors(b2.pos, b1.pos);
+            const dist = dir.length();
+            const collisionDist = (b1.baseRadius + b2.baseRadius) * 0.95;
+
+            if (dist <= collisionDist) {
+              const survivor = b1.mass >= b2.mass ? b1 : b2;
+              const absorbed = b1.mass >= b2.mass ? b2 : b1;
+
+              survivor.mass += absorbed.mass;
+              survivor.evaluateMassState();
+              survivor.triggerCollisionShock();
+
+              bodiesToRemove.add(absorbed);
+
+              if (selectedObject === absorbed) {
+                selectObject(survivor);
+              }
+              continue;
+            }
+
+            if (dist > 2) {
+              const force = (G * b1.mass * b2.mass) / (dist * dist);
+              const accel1 = dir.clone().normalize().multiplyScalar(force / b1.mass);
+              const accel2 = dir.clone().normalize().multiplyScalar(-force / b2.mass);
+
+              b1.vel.addScaledVector(accel1, dt);
+              b2.vel.addScaledVector(accel2, dt);
+            }
+          }
+        }
+
+        celestialBodies.forEach(b => {
+          if (bodiesToRemove.has(b)) return;
+          if (isMovingMode && b === selectedObject) return;
+
+          b.pos.addScaledVector(b.vel, dt);
+          b.mesh.position.copy(b.pos);
+
+          const rotationAngle = (simDeltaTimeSec / DAY_SECONDS) * Math.PI * 2;
+          b.mesh.rotation.y += rotationAngle / steps;
+        });
+      }
+
+      if (bodiesToRemove.size > 0) {
+        bodiesToRemove.forEach(b => {
+          const idx = celestialBodies.indexOf(b);
+          if (idx !== -1) {
+            b.destroy();
+            celestialBodies.splice(idx, 1);
+          }
+        });
+        populateObjectDropdown();
+      }
+
+      // Climate & Active Green Vegetation Growth Spreading
+      const primaryStar = findPrimaryStar();
+
+      celestialBodies.forEach(b => {
+        if (!b.isStar) {
+          if (b.collisionHeatRemainingSec > 0) {
+            b.collisionHeatRemainingSec = Math.max(0, b.collisionHeatRemainingSec - simDeltaTimeSec);
+            b.climateFactor = 1.0;
+            b.vegetationCoverage = 0.0;
+            if (b.collisionHeatRemainingSec === 0) {
+              b.updateAtmosphereGlow();
+              b.updateTextureAndDeform();
+            }
+          } else {
+            const baseYearProgress = simDeltaTimeSec / (10 * SECONDS_PER_YEAR);
+
+            if (primaryStar) {
+              const distToSun = b.pos.distanceTo(primaryStar.pos);
+              const distAU = distToSun / AU;
+
+              if (distAU < 0.75) {
+                b.targetClimateFactor = 1.0;
+                const heatMultiplier = Math.pow(0.75 / Math.max(0.05, distAU), 2);
+                const changeRate = Math.min(1.0, baseYearProgress * heatMultiplier * 10);
+                b.climateFactor = Math.min(1.0, b.climateFactor + changeRate);
+
+                b.vegetationCoverage = Math.max(0, b.vegetationCoverage - changeRate * 2);
+
+                if (b.waterCoverage > 0) {
+                  const boilWaterAmount = Math.min(b.waterCoverage, changeRate * 50);
+                  b.waterCoverage = Math.max(0, b.waterCoverage - boilWaterAmount);
+                  b.atmospherePressure = Math.min(100.0, b.atmospherePressure + boilWaterAmount * 0.2); 
+                  b.updateAtmosphereGlow();
+                }
+
+              } else if (distAU > 1.37) {
+                b.targetClimateFactor = 0.0;
+                const freezeMultiplier = Math.pow(distAU / 1.37, 2); 
+                const freezeRate = Math.min(1.0, baseYearProgress * freezeMultiplier * 8);
+                b.climateFactor = Math.max(0.0, b.climateFactor - freezeRate);
+                b.vegetationCoverage = Math.max(0, b.vegetationCoverage - freezeRate * 2);
+
+              } else {
+                b.targetClimateFactor = 0.5;
+                if (Math.abs(b.climateFactor - b.targetClimateFactor) > 0.0001) {
+                  const diff = b.targetClimateFactor - b.climateFactor;
+                  b.climateFactor += Math.sign(diff) * Math.min(Math.abs(diff), Math.min(1.0, baseYearProgress));
+                }
+
+                // VEGETATION ACTIVE EXPANSION OVER DRY LAND
+                if (b.waterCoverage > 0 && b.waterCoverage < 100 && b.climateFactor >= 0.25 && b.climateFactor <= 0.75) {
+                  const expansionSpeed = Math.min(0.2, baseYearProgress * 0.5);
+                  const oldVeg = b.vegetationCoverage;
+                  b.vegetationCoverage = Math.min(1.0, b.vegetationCoverage + expansionSpeed);
+                  if (Math.abs(b.vegetationCoverage - oldVeg) > 0.003) b.textureDirty = true;
+                } else {
+                  const oldVeg = b.vegetationCoverage;
+                  b.vegetationCoverage = Math.max(0, b.vegetationCoverage - baseYearProgress);
+                  if (Math.abs(b.vegetationCoverage - oldVeg) > 0.003) b.textureDirty = true;
+                }
+              }
+            } else {
+              b.climateFactor = Math.max(0.0, b.climateFactor - Math.min(1.0, baseYearProgress * 10));
+              b.vegetationCoverage = Math.max(0, b.vegetationCoverage - baseYearProgress);
+              b.textureDirty = true;
+            }
+          }
+
+          // Slowly scroll clouds
+          b.cloudOffset = (b.cloudOffset || 0) + 0.15;
+          b.frameCounter = (b.frameCounter || 0) + 1;
+          // Only force a cloud/ice refresh every ~40 frames to stay smooth
+          if (b.frameCounter % 40 === 0) b.textureDirty = true;
+
+          b.updateTextureAndDeform();
+        }
+      });
+
+      if (selectedObject && !isMovingMode) {
+        if (!isSurfaceView) {
+          const camDelta = new THREE.Vector3().subVectors(selectedObject.pos, controls.target);
+          camera.position.add(camDelta);
+          controls.target.copy(selectedObject.pos);
+
+          let currentRadius = selectedObject.baseRadius;
+          selectionOutline.position.copy(selectedObject.pos);
+          selectionOutline.scale.setScalar(currentRadius * 1.3);
+          selectionOutline.lookAt(camera.position);
+        } else {
+          // Keep surface camera anchored relative to moving planet position
+          const surfaceDir = new THREE.Vector3(0, 1, 0.2).normalize(); 
+          const standingHeight = selectedObject.baseRadius * 1.03; 
+          
+          const eyeLevelPos = selectedObject.pos.clone().add(surfaceDir.clone().multiplyScalar(standingHeight));
+          const viewTargetPos = eyeLevelPos.clone().add(new THREE.Vector3(10, 0.5, 5));
+
+          camera.position.copy(eyeLevelPos);
+          controls.target.copy(viewTargetPos);
+        }
+        updateInspectorStats(selectedObject);
+      }
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      updatePhysics();
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
+  </script>
+</body>
+</html>
