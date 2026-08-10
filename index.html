@@ -298,34 +298,62 @@
     const G = (4 * Math.PI * Math.PI * Math.pow(AU, 3)) / (SUN_MASS * Math.pow(SECONDS_PER_YEAR, 2));
 
     let defaultGrayscaleImg = new Image();
-    // No crossOrigin — allows local file:// loading of earth.jpeg / cloud.png
+    // NO crossOrigin — required so local earth.jpeg / cloud.png load from your RSSS folder
 
     let cloudImg = new Image();
     let cloudImgReady = false;
     let cloudPixelData = null;
 
-    defaultGrayscaleImg.onload = () => {
-      celestialBodies.forEach(b => {
-        b.rebuildHeightmap();
-        b.updateTextureAndDeform(true);
-      });
-    };
-
-    cloudImg.onload = () => {
-      // Sample cloud.png into pixel data for fast scrolling
-      const cCanvas = document.createElement('canvas');
-      cCanvas.width = 1024;
-      cCanvas.height = 512;
-      const cCtx = cCanvas.getContext('2d');
-      cCtx.drawImage(cloudImg, 0, 0, 1024, 512);
-      cloudPixelData = cCtx.getImageData(0, 0, 1024, 512);
-      cloudImgReady = true;
+    function applyHeightmapToAllBodies() {
+      if (typeof celestialBodies === 'undefined') return;
       celestialBodies.forEach(b => {
         if (!b.isStar) {
-          b.textureDirty = true;
+          b.rebuildHeightmap();
           b.updateTextureAndDeform(true);
         }
       });
+    }
+
+    function processCloudImage(img) {
+      try {
+        const cCanvas = document.createElement('canvas');
+        cCanvas.width = 1024;
+        cCanvas.height = 512;
+        const cCtx = cCanvas.getContext('2d');
+        cCtx.clearRect(0, 0, 1024, 512);
+        cCtx.drawImage(img, 0, 0, 1024, 512);
+        cloudPixelData = cCtx.getImageData(0, 0, 1024, 512);
+        cloudImgReady = true;
+        if (typeof celestialBodies !== 'undefined') {
+          celestialBodies.forEach(b => {
+            if (!b.isStar) {
+              b.textureDirty = true;
+              b.updateTextureAndDeform(true);
+            }
+          });
+        }
+        console.log("Cloud texture ready");
+      } catch (err) {
+        console.warn("Cloud process failed:", err);
+        cloudImgReady = false;
+        cloudPixelData = null;
+      }
+    }
+
+    defaultGrayscaleImg.onload = () => {
+      console.log("earth.jpeg loaded");
+      applyHeightmapToAllBodies();
+    };
+    defaultGrayscaleImg.onerror = () => {
+      console.warn("Failed to load earth.jpeg — put it in the same folder as index.html");
+    };
+
+    cloudImg.onload = () => {
+      console.log("cloud.png loaded");
+      processCloudImage(cloudImg);
+    };
+    cloudImg.onerror = () => {
+      console.warn("Failed to load cloud.png — put it in the same folder as index.html (or upload one)");
     };
 
     defaultGrayscaleImg.src = 'earth.jpeg';
@@ -621,11 +649,17 @@
         const activeImg = userUploadedImage || (defaultGrayscaleImg.complete && defaultGrayscaleImg.naturalWidth !== 0 ? defaultGrayscaleImg : null);
         const w = this.canvas.width, h = this.canvas.height;
         try {
-          if (activeImg) this.ctx.drawImage(activeImg, 0, 0, w, h);
-          else { this.ctx.fillStyle = '#808080'; this.ctx.fillRect(0, 0, w, h); }
+          if (activeImg) {
+            this.ctx.drawImage(activeImg, 0, 0, w, h);
+          } else {
+            // Neutral mid-high gray so a missing map is not entirely underwater
+            this.ctx.fillStyle = '#b0b0b0';
+            this.ctx.fillRect(0, 0, w, h);
+          }
           const imgData = this.ctx.getImageData(0, 0, w, h);
           const src = imgData.data;
           const heightGrid = new Float32Array(w * h);
+          let minH = 1, maxH = 0;
           for (let y = 0; y < h; y++) {
             for (let x = 0; x < w; x++) {
               let sum = 0, count = 0;
@@ -638,12 +672,23 @@
                   count++;
                 }
               }
-              heightGrid[y * w + x] = sum / count;
+              const v = sum / count;
+              heightGrid[y * w + x] = v;
+              if (v < minH) minH = v;
+              if (v > maxH) maxH = v;
             }
+          }
+          // Normalize so darkest = 0, brightest = 1
+          // Water % then means "lowest X% of this map is ocean" — works for ANY uploaded heightmap
+          const range = Math.max(0.001, maxH - minH);
+          for (let i = 0; i < heightGrid.length; i++) {
+            heightGrid[i] = (heightGrid[i] - minH) / range;
           }
           this.cachedHeightGrid = heightGrid;
           this.textureDirty = true;
-        } catch (e) {}
+        } catch (e) {
+          console.warn("rebuildHeightmap failed:", e);
+        }
       }
 
       // PURE 2D texture. Only runs expensive work when dirty or forced.
@@ -1125,6 +1170,14 @@ if (!isSurfaceView) {
 
     selectObject(earth);
 
+    // If images already finished loading before bodies existed, apply them now
+    if (defaultGrayscaleImg.complete && defaultGrayscaleImg.naturalWidth > 0) {
+      applyHeightmapToAllBodies();
+    }
+    if (cloudImg.complete && cloudImg.naturalWidth > 0 && !cloudImgReady) {
+      processCloudImage(cloudImg);
+    }
+
     document.getElementById('spawn-btn').addEventListener('click', () => {
       const type = document.getElementById('spawn-type').value;
       const distAU = parseFloat(document.getElementById('spawn-distance').value) || 0;
@@ -1171,51 +1224,36 @@ if (!isSurfaceView) {
 
     document.getElementById('texture-upload').addEventListener('change', (e) => {
       const file = e.target.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
-          const img = new Image();
-          img.onload = () => {
-            userUploadedImage = img;
-            celestialBodies.forEach(b => {
-              b.rebuildHeightmap();
-              b.updateTextureAndDeform(true);
-            });
-          };
-          img.src = event.target.result;
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          userUploadedImage = img;
+          console.log("Heightmap uploaded:", file.name, img.width + "x" + img.height);
+          celestialBodies.forEach(b => {
+            if (b.isStar) return;
+            b.cachedHeightGrid = null; // force full rebuild
+            b.textureDirty = true;
+            b.rebuildHeightmap();
+            b.updateTextureAndDeform(true);
+          });
         };
-        reader.readAsDataURL(file);
-      }
+        img.onerror = () => console.warn("Failed to load uploaded heightmap");
+        img.src = event.target.result;
+      };
+      reader.readAsDataURL(file);
     });
 
-    // Upload custom cloud texture — applied as a 2D layer beneath the atmosphere
+    // Custom cloud texture upload (applied under the atmosphere)
     document.getElementById('cloud-upload').addEventListener('change', (e) => {
       const file = e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
       reader.onload = (event) => {
         const img = new Image();
-        img.onload = () => {
-          try {
-            const cCanvas = document.createElement('canvas');
-            cCanvas.width = 1024;
-            cCanvas.height = 512;
-            const cCtx = cCanvas.getContext('2d');
-            cCtx.drawImage(img, 0, 0, 1024, 512);
-            cloudPixelData = cCtx.getImageData(0, 0, 1024, 512);
-            cloudImgReady = true;
-            // Refresh all planets so the new clouds appear under the atmosphere
-            celestialBodies.forEach(b => {
-              if (!b.isStar) {
-                b.textureDirty = true;
-                b.updateTextureAndDeform(true);
-              }
-            });
-            console.log("Custom cloud texture applied");
-          } catch (err) {
-            console.warn("Failed to process cloud texture:", err);
-          }
-        };
+        img.onload = () => processCloudImage(img);
+        img.onerror = () => console.warn("Failed to load uploaded cloud texture");
         img.src = event.target.result;
       };
       reader.readAsDataURL(file);
