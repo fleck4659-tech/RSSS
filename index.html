@@ -196,6 +196,11 @@
     </div>
 
     <div class="control-group">
+      <label for="cloud-upload">Upload Custom Cloud Texture:</label>
+      <input type="file" id="cloud-upload" accept="image/*">
+    </div>
+
+    <div class="control-group">
       <label for="sim-speed-input">Sim Speed (Years per Second):</label>
       <input type="number" id="sim-speed-input" value="0.0001" min="0" step="any">
     </div>
@@ -293,10 +298,9 @@
     const G = (4 * Math.PI * Math.PI * Math.pow(AU, 3)) / (SUN_MASS * Math.pow(SECONDS_PER_YEAR, 2));
 
     let defaultGrayscaleImg = new Image();
-    defaultGrayscaleImg.crossOrigin = "Anonymous";
+    // No crossOrigin — allows local file:// loading of earth.jpeg / cloud.png
 
     let cloudImg = new Image();
-    cloudImg.crossOrigin = "Anonymous";
     let cloudImgReady = false;
     let cloudPixelData = null;
 
@@ -407,7 +411,7 @@
 
         // New features
         this.cityLightsEnabled = false;
-        this.axialTilt = 23.5 * Math.PI / 180; // Earth-like tilt
+        this.axialTilt = 0 * Math.PI / 180; // Earth-like tilt
         this.cloudOffset = Math.random() * 1000;
         this.textureDirty = true;
         this.cachedHeightGrid = null;
@@ -1182,6 +1186,39 @@ if (!isSurfaceView) {
         };
         reader.readAsDataURL(file);
       }
+    });
+
+    // Upload custom cloud texture — applied as a 2D layer beneath the atmosphere
+    document.getElementById('cloud-upload').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const cCanvas = document.createElement('canvas');
+            cCanvas.width = 1024;
+            cCanvas.height = 512;
+            const cCtx = cCanvas.getContext('2d');
+            cCtx.drawImage(img, 0, 0, 1024, 512);
+            cloudPixelData = cCtx.getImageData(0, 0, 1024, 512);
+            cloudImgReady = true;
+            // Refresh all planets so the new clouds appear under the atmosphere
+            celestialBodies.forEach(b => {
+              if (!b.isStar) {
+                b.textureDirty = true;
+                b.updateTextureAndDeform(true);
+              }
+            });
+            console.log("Custom cloud texture applied");
+          } catch (err) {
+            console.warn("Failed to process cloud texture:", err);
+          }
+        };
+        img.src = event.target.result;
+      };
+      reader.readAsDataURL(file);
     });
 
     const moveBtn = document.getElementById('move-toggle-btn');
