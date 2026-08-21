@@ -145,6 +145,50 @@
     .btn-surface.active {
       background: #e06c75;
     }
+    .btn-map2d {
+      background: #56b6c2;
+      color: #000;
+    }
+    .btn-map2d:hover { background: #3d9aa5; }
+    .btn-map2d.active {
+      background: #e5c07b;
+      box-shadow: 0 0 10px rgba(229, 192, 123, 0.5);
+    }
+    #map2d-overlay {
+      display: none;
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      background: #05070f;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      pointer-events: none;
+    }
+    #map2d-overlay.visible {
+      display: flex;
+    }
+    #map2d-frame {
+      position: relative;
+      width: min(92vw, 1400px);
+      aspect-ratio: 2 / 1;
+      max-height: 78vh;
+      border: 2px solid rgba(97, 175, 239, 0.45);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.65);
+      background: #111;
+    }
+    #map2d-canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+    #map2d-label {
+      margin-top: 12px;
+      color: #abb2bf;
+      font-size: 0.9rem;
+    }
     .stat-row {
       display: flex;
       justify-content: space-between;
@@ -219,6 +263,7 @@
 
     <button id="move-toggle-btn" class="btn-move">Move Planet</button>
     <button id="surface-view-btn" class="btn-surface">View from Surface</button>
+    <button id="map2d-btn" class="btn-map2d" style="margin-top:6px;">2D Map View</button>
     <button id="city-lights-btn" class="btn-surface" style="margin-top:6px;">Enable City Lights</button>
 
     <div class="divider"></div>
@@ -283,6 +328,12 @@
   </div>
 
   <div id="canvas-container"></div>
+  <div id="map2d-overlay">
+    <div id="map2d-frame">
+      <canvas id="map2d-canvas" width="2048" height="1024"></canvas>
+    </div>
+    <div id="map2d-label">2D Equirectangular Map — same live surface as the 3D sphere</div>
+  </div>
 
   <script>
     const EARTH_RADIUS = 10.0;
@@ -385,6 +436,128 @@
     let selectedObject = null;
     let isMovingMode = false;
     let isSurfaceView = false;
+    let is2DMapMode = false;
+    let savedCamPos = null;
+    let savedCamTarget = null;
+
+    const map2dOverlay = document.getElementById('map2d-overlay');
+    const map2dCanvas = document.getElementById('map2d-canvas');
+    const map2dCtx = map2dCanvas ? map2dCanvas.getContext('2d') : null;
+    const map2dLabel = document.getElementById('map2d-label');
+
+    // Flat map plane uses the SAME CanvasTexture as the planet sphere (guaranteed identical)
+    const mapPlaneGeo = new THREE.PlaneGeometry(20, 10);
+    const mapPlaneMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
+    const mapPlane = new THREE.Mesh(mapPlaneGeo, mapPlaneMat);
+    mapPlane.visible = false;
+    scene.add(mapPlane);
+
+    const mapBg = new THREE.Mesh(
+      new THREE.PlaneGeometry(200, 100),
+      new THREE.MeshBasicMaterial({ color: 0x05070f, side: THREE.DoubleSide })
+    );
+    mapBg.position.set(0, 0, -2);
+    mapBg.visible = false;
+    scene.add(mapBg);
+
+    function sync2DMapTexture(body) {
+      if (!body || body.isStar) {
+        mapPlaneMat.map = null;
+        mapPlaneMat.needsUpdate = true;
+        if (map2dCtx && map2dCanvas) {
+          map2dCtx.fillStyle = '#111';
+          map2dCtx.fillRect(0, 0, map2dCanvas.width, map2dCanvas.height);
+          map2dCtx.fillStyle = '#888';
+          map2dCtx.font = '28px sans-serif';
+          map2dCtx.textAlign = 'center';
+          map2dCtx.fillText(
+            body && body.isStar ? 'Stars have no surface map' : 'Select a planet or moon',
+            map2dCanvas.width / 2,
+            map2dCanvas.height / 2
+          );
+        }
+        if (map2dLabel) map2dLabel.textContent = '2D Map';
+        return;
+      }
+      try {
+        if (!body.cachedHeightGrid) body.rebuildHeightmap();
+        body.textureDirty = true;
+        body.updateTextureAndDeform(true);
+      } catch (err) {
+        console.warn('2D map paint failed:', err);
+      }
+      // Same texture object the sphere mesh uses
+      mapPlaneMat.map = body.texture;
+      if (body.texture) body.texture.needsUpdate = true;
+      mapPlaneMat.needsUpdate = true;
+      if (map2dCtx && map2dCanvas && body.canvas) {
+        map2dCtx.drawImage(body.canvas, 0, 0, map2dCanvas.width, map2dCanvas.height);
+      }
+      if (map2dLabel) map2dLabel.textContent = `2D Map — ${body.name} (same surface as 3D sphere)`;
+    }
+
+    function blitPlanetTo2DMap(body) {
+      sync2DMapTexture(body);
+    }
+
+    function set2DMapMode(on) {
+      is2DMapMode = !!on;
+      const btn = document.getElementById('map2d-btn');
+      if (btn) {
+        btn.classList.toggle('active', is2DMapMode);
+        btn.textContent = is2DMapMode ? 'Exit 2D Map' : '2D Map View';
+      }
+      if (map2dOverlay) map2dOverlay.classList.toggle('visible', is2DMapMode);
+
+      if (is2DMapMode) {
+        if (isSurfaceView) {
+          isSurfaceView = false;
+          const surfaceBtn = document.getElementById('surface-view-btn');
+          if (surfaceBtn) {
+            surfaceBtn.classList.remove('active');
+            surfaceBtn.textContent = 'View from Surface';
+          }
+        }
+        savedCamPos = camera.position.clone();
+        savedCamTarget = controls.target.clone();
+
+        celestialBodies.forEach(b => { if (b.mesh) b.mesh.visible = false; });
+        selectionOutline.visible = false;
+        mapPlane.visible = true;
+        mapBg.visible = true;
+
+        sync2DMapTexture(selectedObject);
+
+        camera.position.set(0, 0, 16);
+        controls.target.set(0, 0, 0);
+        controls.enableRotate = false;
+        controls.enablePan = true;
+        controls.minDistance = 6;
+        controls.maxDistance = 40;
+        controls.enabled = true;
+        controls.update();
+      } else {
+        mapPlane.visible = false;
+        mapBg.visible = false;
+        celestialBodies.forEach(b => { if (b.mesh) b.mesh.visible = true; });
+        controls.enableRotate = true;
+        controls.minDistance = 0;
+        controls.maxDistance = 1500000;
+        if (savedCamPos && savedCamTarget) {
+          camera.position.copy(savedCamPos);
+          controls.target.copy(savedCamTarget);
+          controls.update();
+        } else if (selectedObject) {
+          focusCameraOn(selectedObject);
+        }
+        if (selectedObject && !selectedObject.isStar) selectionOutline.visible = true;
+      }
+    }
+
+    function toggle2DMapMode() {
+      if (!selectedObject) return;
+      set2DMapMode(!is2DMapMode);
+    }
 
     const outlineGeo = new THREE.RingGeometry(1.2, 1.35, 64);
     const outlineMat = new THREE.MeshBasicMaterial({ color: 0x61afef, side: THREE.DoubleSide });
@@ -1076,9 +1249,16 @@
       document.getElementById('surface-view-btn').classList.remove('active');
       document.getElementById('surface-view-btn').textContent = "View from Surface";
 
+      // Don't yank the camera away while viewing the 2D map
+      if (is2DMapMode) {
+        sync2DMapTexture(body);
+        return;
+      }
+
       controls.target.copy(body.pos);
       const distOffset = Math.max(body.baseRadius * 18, 25);
       const direction = camera.position.clone().sub(controls.target).normalize();
+      if (direction.lengthSq() < 0.0001) direction.set(0, 0.3, 1).normalize();
       
       camera.position.copy(body.pos).add(direction.multiplyScalar(distOffset));
       controls.update();
@@ -1138,6 +1318,7 @@ if (!isSurfaceView) {
     }
 
     document.getElementById('surface-view-btn').addEventListener('click', toggleSurfaceView);
+    document.getElementById('map2d-btn').addEventListener('click', toggle2DMapMode);
 
     const sun = new CelestialBody("Sun", SUN_MASS, SUN_RADIUS, new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, 0), true);
     celestialBodies.push(sun);
@@ -1238,6 +1419,7 @@ if (!isSurfaceView) {
             b.rebuildHeightmap();
             b.updateTextureAndDeform(true);
           });
+          if (is2DMapMode) blitPlanetTo2DMap(selectedObject);
         };
         img.onerror = () => console.warn("Failed to load uploaded heightmap");
         img.src = event.target.result;
@@ -1252,7 +1434,10 @@ if (!isSurfaceView) {
       const reader = new FileReader();
       reader.onload = (event) => {
         const img = new Image();
-        img.onload = () => processCloudImage(img);
+        img.onload = () => {
+          processCloudImage(img);
+          if (is2DMapMode) blitPlanetTo2DMap(selectedObject);
+        };
         img.onerror = () => console.warn("Failed to load uploaded cloud texture");
         img.src = event.target.result;
       };
@@ -1397,6 +1582,7 @@ if (!isSurfaceView) {
       updateInspectorStats(body);
 
       focusCameraOn(body);
+      if (is2DMapMode) blitPlanetTo2DMap(body);
     }
 
     document.getElementById('active-object-select').addEventListener('change', (e) => {
@@ -1471,7 +1657,9 @@ if (!isSurfaceView) {
       if (selectedObject) {
         selectedObject.atmosphereType = e.target.value;
         selectedObject.updateAtmosphereGlow();
-        selectedObject.updateTextureAndDeform();
+        selectedObject.textureDirty = true;
+        selectedObject.updateTextureAndDeform(true);
+        if (is2DMapMode) blitPlanetTo2DMap(selectedObject);
       }
     });
 
@@ -1481,6 +1669,9 @@ if (!isSurfaceView) {
       if (selectedObject) {
         selectedObject.atmospherePressure = val;
         selectedObject.updateAtmosphereGlow();
+        selectedObject.textureDirty = true;
+        selectedObject.updateTextureAndDeform(true);
+        if (is2DMapMode) blitPlanetTo2DMap(selectedObject);
       }
     });
 
@@ -1491,6 +1682,7 @@ if (!isSurfaceView) {
         selectedObject.waterCoverage = Math.max(0, Math.min(100, val));
         selectedObject.textureDirty = true;
         selectedObject.updateTextureAndDeform(true);
+        if (is2DMapMode) blitPlanetTo2DMap(selectedObject);
       }
     });
 
@@ -1501,6 +1693,7 @@ if (!isSurfaceView) {
       selectedObject.updateTextureAndDeform(true);
       const btn = document.getElementById('city-lights-btn');
       btn.textContent = selectedObject.cityLightsEnabled ? "Disable City Lights" : "Enable City Lights";
+      if (is2DMapMode) blitPlanetTo2DMap(selectedObject);
     });
 
     document.getElementById('delete-obj-btn').addEventListener('click', () => {
@@ -1864,7 +2057,7 @@ if (!isSurfaceView) {
         }
       });
 
-      if (selectedObject && !isMovingMode) {
+      if (selectedObject && !isMovingMode && !is2DMapMode) {
         if (!isSurfaceView) {
           const camDelta = new THREE.Vector3().subVectors(selectedObject.pos, controls.target);
           camera.position.add(camDelta);
@@ -1911,6 +2104,17 @@ const viewTargetPos = eyeLevelPos.clone().add(
       requestAnimationFrame(animate);
       updatePhysics();
       controls.update();
+      // Keep 2D map texture in sync every frame (water, veg, clouds, ice)
+      if (is2DMapMode && selectedObject && !selectedObject.isStar) {
+        if (selectedObject.texture) selectedObject.texture.needsUpdate = true;
+        if (mapPlaneMat.map !== selectedObject.texture) {
+          mapPlaneMat.map = selectedObject.texture;
+          mapPlaneMat.needsUpdate = true;
+        }
+        if (map2dCtx && map2dCanvas && selectedObject.canvas) {
+          map2dCtx.drawImage(selectedObject.canvas, 0, 0, map2dCanvas.width, map2dCanvas.height);
+        }
+      }
       renderer.render(scene, camera);
     }
 
