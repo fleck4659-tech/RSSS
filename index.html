@@ -205,6 +205,70 @@
       color: #e06c75;
       font-weight: bold;
     }
+    #date-bar {
+      position: absolute;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      z-index: 12;
+      background: rgba(12, 14, 24, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 10px;
+      padding: 10px 18px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.7);
+      backdrop-filter: blur(10px);
+      cursor: pointer;
+      text-align: center;
+      min-width: 280px;
+      user-select: none;
+    }
+    #date-bar:hover {
+      border-color: rgba(97, 175, 239, 0.55);
+    }
+    #date-bar .date-main {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: #61afef;
+      letter-spacing: 0.04em;
+    }
+    #date-bar .date-hint {
+      font-size: 0.72rem;
+      color: #828997;
+      margin-top: 3px;
+    }
+    #date-editor {
+      display: none;
+      position: absolute;
+      left: 50%;
+      bottom: 70px;
+      transform: translateX(-50%);
+      z-index: 13;
+      width: 320px;
+      background: rgba(12, 14, 24, 0.96);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      border-radius: 10px;
+      padding: 14px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.8);
+    }
+    #date-editor.visible { display: block; }
+    #date-editor h3 {
+      margin-top: 0;
+    }
+    #date-editor .date-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+    #date-editor .date-row-2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    #date-editor label {
+      font-size: 0.75rem;
+    }
   </style>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -327,6 +391,44 @@
     <button id="delete-obj-btn" style="background: #e06c75; margin-top: 8px;">Delete Object</button>
   </div>
 
+  <div id="date-bar" title="Click to set date & time">
+    <div class="date-main" id="date-display">01/01/0000 at 00:00:00</div>
+    <div class="date-hint">Click to set date / time · advances with sim speed</div>
+  </div>
+  <div id="date-editor">
+    <h3>Set Simulation Date</h3>
+    <div class="date-row">
+      <div>
+        <label for="date-month">Month</label>
+        <input type="number" id="date-month" min="1" max="12" value="1">
+      </div>
+      <div>
+        <label for="date-day">Day</label>
+        <input type="number" id="date-day" min="1" max="31" value="1">
+      </div>
+      <div>
+        <label for="date-year">Year</label>
+        <input type="number" id="date-year" step="1" value="0">
+      </div>
+    </div>
+    <div class="date-row-2">
+      <div>
+        <label for="date-hour">Hour</label>
+        <input type="number" id="date-hour" min="0" max="23" value="0">
+      </div>
+      <div>
+        <label for="date-minute">Minute</label>
+        <input type="number" id="date-minute" min="0" max="59" value="0">
+      </div>
+      <div>
+        <label for="date-second">Second</label>
+        <input type="number" id="date-second" min="0" max="59" value="0">
+      </div>
+    </div>
+    <button id="date-apply-btn" class="btn-spawn">Apply Date</button>
+    <button id="date-close-btn" style="margin-top:6px;">Close</button>
+  </div>
+
   <div id="canvas-container"></div>
   <div id="map2d-overlay">
     <div id="map2d-frame">
@@ -437,78 +539,44 @@
     let isMovingMode = false;
     let isSurfaceView = false;
     let is2DMapMode = false;
-    let savedCamPos = null;
-    let savedCamTarget = null;
 
     const map2dOverlay = document.getElementById('map2d-overlay');
     const map2dCanvas = document.getElementById('map2d-canvas');
-    const map2dCtx = map2dCanvas ? map2dCanvas.getContext('2d') : null;
+    const map2dCtx = map2dCanvas.getContext('2d');
     const map2dLabel = document.getElementById('map2d-label');
 
-    // Flat map plane uses the SAME CanvasTexture as the planet sphere (guaranteed identical)
-    const mapPlaneGeo = new THREE.PlaneGeometry(20, 10);
-    const mapPlaneMat = new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide });
-    const mapPlane = new THREE.Mesh(mapPlaneGeo, mapPlaneMat);
-    mapPlane.visible = false;
-    scene.add(mapPlane);
-
-    const mapBg = new THREE.Mesh(
-      new THREE.PlaneGeometry(200, 100),
-      new THREE.MeshBasicMaterial({ color: 0x05070f, side: THREE.DoubleSide })
-    );
-    mapBg.position.set(0, 0, -2);
-    mapBg.visible = false;
-    scene.add(mapBg);
-
-    function sync2DMapTexture(body) {
+    // 2D map = exact copy of the planet's surface canvas (same water/land/ice/clouds/veg)
+    function blitPlanetTo2DMap(body) {
+      if (!map2dCtx || !map2dCanvas) return;
+      map2dCtx.fillStyle = '#111';
+      map2dCtx.fillRect(0, 0, map2dCanvas.width, map2dCanvas.height);
       if (!body || body.isStar) {
-        mapPlaneMat.map = null;
-        mapPlaneMat.needsUpdate = true;
-        if (map2dCtx && map2dCanvas) {
-          map2dCtx.fillStyle = '#111';
-          map2dCtx.fillRect(0, 0, map2dCanvas.width, map2dCanvas.height);
-          map2dCtx.fillStyle = '#888';
-          map2dCtx.font = '28px sans-serif';
-          map2dCtx.textAlign = 'center';
-          map2dCtx.fillText(
-            body && body.isStar ? 'Stars have no surface map' : 'Select a planet or moon',
-            map2dCanvas.width / 2,
-            map2dCanvas.height / 2
-          );
-        }
+        map2dCtx.fillStyle = '#888';
+        map2dCtx.font = '32px sans-serif';
+        map2dCtx.textAlign = 'center';
+        map2dCtx.fillText(body && body.isStar ? 'Stars have no surface map' : 'Select a planet or moon', map2dCanvas.width / 2, map2dCanvas.height / 2);
         if (map2dLabel) map2dLabel.textContent = '2D Map';
         return;
       }
-      try {
-        if (!body.cachedHeightGrid) body.rebuildHeightmap();
-        body.textureDirty = true;
-        body.updateTextureAndDeform(true);
-      } catch (err) {
-        console.warn('2D map paint failed:', err);
-      }
-      // Same texture object the sphere mesh uses
-      mapPlaneMat.map = body.texture;
-      if (body.texture) body.texture.needsUpdate = true;
-      mapPlaneMat.needsUpdate = true;
-      if (map2dCtx && map2dCanvas && body.canvas) {
+      // Paint using the SAME pipeline as the sphere, then copy that canvas
+      body.textureDirty = true;
+      body.updateTextureAndDeform(true);
+      if (body.canvas && body.canvas.width > 0) {
         map2dCtx.drawImage(body.canvas, 0, 0, map2dCanvas.width, map2dCanvas.height);
       }
-      if (map2dLabel) map2dLabel.textContent = `2D Map — ${body.name} (same surface as 3D sphere)`;
-    }
-
-    function blitPlanetTo2DMap(body) {
-      sync2DMapTexture(body);
+      if (map2dLabel) {
+        map2dLabel.textContent = `2D Map — ${body.name} (identical surface data as the 3D sphere)`;
+      }
     }
 
     function set2DMapMode(on) {
       is2DMapMode = !!on;
+      if (map2dOverlay) map2dOverlay.classList.toggle('visible', is2DMapMode);
       const btn = document.getElementById('map2d-btn');
       if (btn) {
         btn.classList.toggle('active', is2DMapMode);
         btn.textContent = is2DMapMode ? 'Exit 2D Map' : '2D Map View';
       }
-      if (map2dOverlay) map2dOverlay.classList.toggle('visible', is2DMapMode);
-
       if (is2DMapMode) {
         if (isSurfaceView) {
           isSurfaceView = false;
@@ -517,40 +585,9 @@
             surfaceBtn.classList.remove('active');
             surfaceBtn.textContent = 'View from Surface';
           }
+          controls.enabled = true;
         }
-        savedCamPos = camera.position.clone();
-        savedCamTarget = controls.target.clone();
-
-        celestialBodies.forEach(b => { if (b.mesh) b.mesh.visible = false; });
-        selectionOutline.visible = false;
-        mapPlane.visible = true;
-        mapBg.visible = true;
-
-        sync2DMapTexture(selectedObject);
-
-        camera.position.set(0, 0, 16);
-        controls.target.set(0, 0, 0);
-        controls.enableRotate = false;
-        controls.enablePan = true;
-        controls.minDistance = 6;
-        controls.maxDistance = 40;
-        controls.enabled = true;
-        controls.update();
-      } else {
-        mapPlane.visible = false;
-        mapBg.visible = false;
-        celestialBodies.forEach(b => { if (b.mesh) b.mesh.visible = true; });
-        controls.enableRotate = true;
-        controls.minDistance = 0;
-        controls.maxDistance = 1500000;
-        if (savedCamPos && savedCamTarget) {
-          camera.position.copy(savedCamPos);
-          controls.target.copy(savedCamTarget);
-          controls.update();
-        } else if (selectedObject) {
-          focusCameraOn(selectedObject);
-        }
-        if (selectedObject && !selectedObject.isStar) selectionOutline.visible = true;
+        blitPlanetTo2DMap(selectedObject);
       }
     }
 
@@ -577,6 +614,104 @@
     let celestialBodies = [];
     let objectCounter = 1;
     let userUploadedImage = null;
+
+    // Simulation calendar (bottom date bar)
+    let simCalendar = {
+      year: 0,
+      month: 1,
+      day: 1,
+      hour: 0,
+      minute: 0,
+      second: 0,
+      // fractional second accumulator from physics
+      fracSec: 0
+    };
+
+    function pad2(n) {
+      n = Math.floor(Math.abs(n));
+      return (n < 10 ? '0' : '') + n;
+    }
+
+    function daysInMonth(year, month) {
+      return new Date(Math.max(0, year), month, 0).getDate();
+    }
+
+    function formatSimDate() {
+      const c = simCalendar;
+      const y = c.year;
+      const yStr = (y < 0 ? '-' : '') + String(Math.abs(y)).padStart(4, '0');
+      return `${pad2(c.month)}/${pad2(c.day)}/${yStr} at ${pad2(c.hour)}:${pad2(c.minute)}:${pad2(c.second)}`;
+    }
+
+    function refreshDateDisplay() {
+      const el = document.getElementById('date-display');
+      if (el) el.textContent = formatSimDate();
+    }
+
+    function advanceSimCalendar(simDeltaTimeSec) {
+      if (!simDeltaTimeSec || simDeltaTimeSec <= 0) return;
+      simCalendar.fracSec += simDeltaTimeSec;
+      let whole = Math.floor(simCalendar.fracSec);
+      if (whole <= 0) return;
+      simCalendar.fracSec -= whole;
+
+      simCalendar.second += whole;
+      while (simCalendar.second >= 60) {
+        simCalendar.second -= 60;
+        simCalendar.minute += 1;
+      }
+      while (simCalendar.minute >= 60) {
+        simCalendar.minute -= 60;
+        simCalendar.hour += 1;
+      }
+      while (simCalendar.hour >= 24) {
+        simCalendar.hour -= 24;
+        simCalendar.day += 1;
+      }
+      // Month/year roll (support huge year values)
+      while (true) {
+        const dim = daysInMonth(Math.max(1, Math.abs(simCalendar.year) || 1), simCalendar.month);
+        if (simCalendar.day <= dim) break;
+        simCalendar.day -= dim;
+        simCalendar.month += 1;
+        if (simCalendar.month > 12) {
+          simCalendar.month = 1;
+          simCalendar.year += 1;
+        }
+      }
+      refreshDateDisplay();
+    }
+
+    function applyCalendarFromInputs() {
+      const year = parseInt(document.getElementById('date-year').value, 10);
+      const month = parseInt(document.getElementById('date-month').value, 10);
+      const day = parseInt(document.getElementById('date-day').value, 10);
+      const hour = parseInt(document.getElementById('date-hour').value, 10);
+      const minute = parseInt(document.getElementById('date-minute').value, 10);
+      const second = parseInt(document.getElementById('date-second').value, 10);
+      simCalendar.year = isNaN(year) ? 0 : year;
+      simCalendar.month = Math.min(12, Math.max(1, isNaN(month) ? 1 : month));
+      simCalendar.day = Math.min(31, Math.max(1, isNaN(day) ? 1 : day));
+      simCalendar.hour = Math.min(23, Math.max(0, isNaN(hour) ? 0 : hour));
+      simCalendar.minute = Math.min(59, Math.max(0, isNaN(minute) ? 0 : minute));
+      simCalendar.second = Math.min(59, Math.max(0, isNaN(second) ? 0 : second));
+      simCalendar.fracSec = 0;
+      refreshDateDisplay();
+    }
+
+    function openDateEditor() {
+      document.getElementById('date-year').value = simCalendar.year;
+      document.getElementById('date-month').value = simCalendar.month;
+      document.getElementById('date-day').value = simCalendar.day;
+      document.getElementById('date-hour').value = simCalendar.hour;
+      document.getElementById('date-minute').value = simCalendar.minute;
+      document.getElementById('date-second').value = simCalendar.second;
+      document.getElementById('date-editor').classList.add('visible');
+    }
+
+    function closeDateEditor() {
+      document.getElementById('date-editor').classList.remove('visible');
+    }
 
     // Debris / dust particles from impacts & tidal disruption
     let debrisParticles = [];
@@ -617,6 +752,13 @@
         this.textureDirty = true;
         this.cachedHeightGrid = null;
         this.frameCounter = 0;
+
+        // Tectonic plates — slow heightmap drift over millions of years
+        this.plateIds = null;          // Uint8Array per pixel
+        this.plateVelU = null;         // longitude drift (UV / Myr)
+        this.plateVelV = null;         // latitude drift (UV / Myr)
+        this.tectonicYearBuffer = 0;   // accumulate sim years between steps
+        this.tectonicsEnabled = !isStar;
 
         // Gradual collision / impact system (Universe Sandbox inspired)
         this.glowIntensity = 0;           // 0-1+ for impact heating glow
@@ -858,10 +1000,120 @@
             heightGrid[i] = (heightGrid[i] - minH) / range;
           }
           this.cachedHeightGrid = heightGrid;
+          this.initTectonicPlates(w, h);
           this.textureDirty = true;
         } catch (e) {
           console.warn("rebuildHeightmap failed:", e);
         }
+      }
+
+      // Build simple plate map + drift velocities (rebuilt when heightmap is uploaded)
+      initTectonicPlates(w, h) {
+        if (this.isStar) return;
+        const plateCount = 8;
+        this.plateVelU = new Float32Array(plateCount);
+        this.plateVelV = new Float32Array(plateCount);
+        // Seed from name so each body is stable/reproducible
+        let seed = 0;
+        for (let i = 0; i < this.name.length; i++) seed = (seed * 31 + this.name.charCodeAt(i)) | 0;
+        const rand = () => {
+          seed = (seed * 1664525 + 1013904223) | 0;
+          return (seed >>> 0) / 4294967296;
+        };
+        // Plate centers in UV space
+        const centers = [];
+        for (let p = 0; p < plateCount; p++) {
+          centers.push({ x: rand(), y: rand() });
+          // Drift rates exaggerated so continents visibly shift over long sim runs
+          this.plateVelU[p] = (rand() - 0.5) * 0.15;
+          this.plateVelV[p] = (rand() - 0.5) * 0.04;
+        }
+        this.plateIds = new Uint8Array(w * h);
+        for (let y = 0; y < h; y++) {
+          for (let x = 0; x < w; x++) {
+            const u = x / w;
+            const v = y / h;
+            let best = 0;
+            let bestD = 1e9;
+            for (let p = 0; p < plateCount; p++) {
+              let dx = Math.abs(u - centers[p].x);
+              if (dx > 0.5) dx = 1 - dx; // wrap longitude
+              const dy = v - centers[p].y;
+              const d = dx * dx + dy * dy * 1.4;
+              if (d < bestD) {
+                bestD = d;
+                best = p;
+              }
+            }
+            this.plateIds[y * w + x] = best;
+          }
+        }
+        this.tectonicYearBuffer = 0;
+      }
+
+      // Advect height field by plate motion. years = simulation years to apply.
+      applyTectonics(years) {
+        if (this.isStar || !this.tectonicsEnabled || !this.cachedHeightGrid || !this.plateIds) return;
+        if (!years || years <= 0) return;
+
+        this.tectonicYearBuffer += years;
+        // Step every 2,000 sim years (speed up time to see continents drift)
+        const STEP_YEARS = 2000;
+        if (this.tectonicYearBuffer < STEP_YEARS) return;
+
+        const steps = Math.min(12, Math.floor(this.tectonicYearBuffer / STEP_YEARS));
+        this.tectonicYearBuffer -= steps * STEP_YEARS;
+
+        const w = this.canvas.width;
+        const h = this.canvas.height;
+        // Treat each step as a chunk of geologic time for visible motion
+        const myr = STEP_YEARS / 1e5;
+
+        for (let s = 0; s < steps; s++) {
+          const cur = this.cachedHeightGrid;
+          const next = new Float32Array(cur.length);
+          for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+              const idx = y * w + x;
+              const p = this.plateIds[idx];
+              // Sample from where this crust came from (reverse advection)
+              const su = x - this.plateVelU[p] * myr * w;
+              const sv = y - this.plateVelV[p] * myr * h;
+              let x0 = Math.floor(su);
+              let y0 = Math.floor(sv);
+              const fx = su - x0;
+              const fy = sv - y0;
+              // Wrap X (longitude), clamp Y (poles)
+              x0 = ((x0 % w) + w) % w;
+              const x1 = (x0 + 1) % w;
+              y0 = Math.max(0, Math.min(h - 1, y0));
+              const y1 = Math.max(0, Math.min(h - 1, y0 + 1));
+              const h00 = cur[y0 * w + x0];
+              const h10 = cur[y0 * w + x1];
+              const h01 = cur[y1 * w + x0];
+              const h11 = cur[y1 * w + x1];
+              let elev =
+                h00 * (1 - fx) * (1 - fy) +
+                h10 * fx * (1 - fy) +
+                h01 * (1 - fx) * fy +
+                h11 * fx * fy;
+
+              // Convergent boundary uplift / divergent rifting between plates
+              const pR = this.plateIds[y * w + ((x + 1) % w)];
+              if (pR !== p) {
+                const closing = this.plateVelU[p] - this.plateVelU[pR];
+                if (closing > 0.005) {
+                  elev = Math.min(1, elev + closing * myr * 2.5);
+                } else if (closing < -0.005) {
+                  elev = Math.max(0, elev + closing * myr * 1.2);
+                }
+              }
+              next[idx] = elev;
+            }
+          }
+          this.cachedHeightGrid = next;
+        }
+        this.textureDirty = true;
       }
 
       // PURE 2D texture. Only runs expensive work when dirty or forced.
@@ -1249,16 +1501,9 @@
       document.getElementById('surface-view-btn').classList.remove('active');
       document.getElementById('surface-view-btn').textContent = "View from Surface";
 
-      // Don't yank the camera away while viewing the 2D map
-      if (is2DMapMode) {
-        sync2DMapTexture(body);
-        return;
-      }
-
       controls.target.copy(body.pos);
       const distOffset = Math.max(body.baseRadius * 18, 25);
       const direction = camera.position.clone().sub(controls.target).normalize();
-      if (direction.lengthSq() < 0.0001) direction.set(0, 0.3, 1).normalize();
       
       camera.position.copy(body.pos).add(direction.multiplyScalar(distOffset));
       controls.update();
@@ -1746,6 +1991,23 @@ if (!isSurfaceView) {
       simYearsPerSec = isNaN(val) || val < 0 ? 0 : val;
     });
 
+    // Date bar — click to set simulation date/time
+    document.getElementById('date-bar').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openDateEditor();
+    });
+    document.getElementById('date-apply-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      applyCalendarFromInputs();
+      closeDateEditor();
+    });
+    document.getElementById('date-close-btn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      closeDateEditor();
+    });
+    document.getElementById('date-editor').addEventListener('click', (e) => e.stopPropagation());
+    refreshDateDisplay();
+
     const pauseBtn = document.getElementById('pause-btn');
     pauseBtn.addEventListener('click', () => {
       isPaused = !isPaused;
@@ -1766,6 +2028,10 @@ if (!isSurfaceView) {
 
       const realDeltaTimeSec = 0.016; 
       const simDeltaTimeSec = realDeltaTimeSec * simYearsPerSec * SECONDS_PER_YEAR;
+      const simYearsDelta = realDeltaTimeSec * simYearsPerSec;
+
+      // Advance the on-screen calendar with simulation time
+      advanceSimCalendar(simDeltaTimeSec);
 
       const steps = Math.min(200, Math.max(8, Math.floor(simYearsPerSec * 1.5)));
       const dt = simDeltaTimeSec / steps;
@@ -2047,6 +2313,11 @@ if (!isSurfaceView) {
             }
           }
 
+          // Tectonic plates slowly reshape the heightmap over geologic time
+          if (b.tectonicsEnabled && b.cachedHeightGrid) {
+            b.applyTectonics(simYearsDelta);
+          }
+
           // Slowly scroll clouds
           b.cloudOffset = (b.cloudOffset || 0) + 0.15;
           b.frameCounter = (b.frameCounter || 0) + 1;
@@ -2057,7 +2328,7 @@ if (!isSurfaceView) {
         }
       });
 
-      if (selectedObject && !isMovingMode && !is2DMapMode) {
+      if (selectedObject && !isMovingMode) {
         if (!isSurfaceView) {
           const camDelta = new THREE.Vector3().subVectors(selectedObject.pos, controls.target);
           camera.position.add(camDelta);
@@ -2104,18 +2375,11 @@ const viewTargetPos = eyeLevelPos.clone().add(
       requestAnimationFrame(animate);
       updatePhysics();
       controls.update();
-      // Keep 2D map texture in sync every frame (water, veg, clouds, ice)
-      if (is2DMapMode && selectedObject && !selectedObject.isStar) {
-        if (selectedObject.texture) selectedObject.texture.needsUpdate = true;
-        if (mapPlaneMat.map !== selectedObject.texture) {
-          mapPlaneMat.map = selectedObject.texture;
-          mapPlaneMat.needsUpdate = true;
-        }
-        if (map2dCtx && map2dCanvas && selectedObject.canvas) {
-          map2dCtx.drawImage(selectedObject.canvas, 0, 0, map2dCanvas.width, map2dCanvas.height);
-        }
-      }
       renderer.render(scene, camera);
+      // 2D map always mirrors the sphere's canvas (water, veg growth, clouds, ice)
+      if (is2DMapMode && selectedObject && !selectedObject.isStar && selectedObject.canvas) {
+        map2dCtx.drawImage(selectedObject.canvas, 0, 0, map2dCanvas.width, map2dCanvas.height);
+      }
     }
 
     window.addEventListener('resize', () => {
